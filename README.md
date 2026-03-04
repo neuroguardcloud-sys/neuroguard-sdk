@@ -14,9 +14,12 @@ neuroguard/
 │   ├── __init__.py
 │   ├── manager.py       # ConsentManager, ConsentScope, ConsentLevel
 │   └── ledger.py        # ConsentLedger (tamper-evident event log)
-└── audit/               # Audit logging
+├── audit/               # Audit logging
+│   ├── __init__.py
+│   └── logger.py       # AuditLogger, AuditEvent, AuditAction
+└── api/                 # Local REST API
     ├── __init__.py
-    └── logger.py       # AuditLogger, AuditEvent, AuditAction
+    └── app.py           # FastAPI app (health, consent, vault, compliance)
 
 examples/
 └── encrypted_neural_processing.py   # Example: encrypt → consent check → process → audit
@@ -126,6 +129,59 @@ Run the example:
 ```bash
 python examples/encrypted_neural_processing.py
 ```
+
+## Local REST API
+
+NeuroGuard can run as a local-first REST API (vault in-memory, consent ledger persisted to `~/.neuroguard/consent_ledger.jsonl`).
+
+### Run the API
+
+```bash
+# From repo root (after pip install -e .)
+python -m neuroguard.api
+```
+
+Or install the CLI and run:
+
+```bash
+pip install -e .
+neuroguard-api
+```
+
+Server listens on `http://127.0.0.1:8000`. Optional env: `NEUROGUARD_ENCRYPTION_KEY` (base64 key), `NEUROGUARD_LEDGER_PATH` (custom ledger file).
+
+### Example curl commands
+
+```bash
+# Health
+curl -s http://127.0.0.1:8000/health
+
+# Grant consent for a user and category
+curl -s -X POST http://127.0.0.1:8000/consent/grant \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "category": "neural", "actor": "user"}'
+
+# Store encrypted data (requires prior consent)
+curl -s -X POST http://127.0.0.1:8000/vault/store \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "category": "neural", "plaintext_base64": "'$(echo -n "secret data" | base64)'"}'
+
+# Retrieve and decrypt
+curl -s -X POST http://127.0.0.1:8000/vault/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "category": "neural"}'
+
+# Compliance report (optional ?user_id= for consent history)
+curl -s "http://127.0.0.1:8000/compliance/report?user_id=alice"
+
+# Compliance report as PDF (optional query param: user_id)
+# With user_id: filename is neuroguard_compliance_report_<user_id>.pdf
+curl -s -o report.pdf "http://127.0.0.1:8000/compliance/report.pdf?user_id=alice"
+# Without user_id: filename is neuroguard_compliance_report_all.pdf
+curl -s -o report_all.pdf "http://127.0.0.1:8000/compliance/report.pdf"
+```
+
+API docs: `http://127.0.0.1:8000/docs` (Swagger UI).
 
 ## Tests
 

@@ -1,0 +1,270 @@
+"""
+NeuroGuard local REST API — expose encryption, consent, vault, and compliance via FastAPI.
+
+Local-first: vault in-memory, consent ledger persisted to ~/.neuroguard/consent_ledger.jsonl.
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from neuroguard.api.pdf_report import generate_compliance_pdf
+
+from neuroguard import NeuralDataCipher, ConsentManager, AuditLogger, NeuralDataVault
+from neuroguard.audit import AuditAction
+from neuroguard.consent import ConsentLedger
+from neuroguard.privacy_score import evaluate
+
+# ---------------------------------------------------------------------------
+# Request/response models
+# ---------------------------------------------------------------------------
+
+
+class ConsentBody(BaseModel):
+    user_id: str
+    category: str
+    actor: Optional[str] = "user"
+    reason: Optional[str] = None
+
+
+class VaultStoreBody(BaseModel):
+    user_id: str
+    category: str
+    plaintext_base64: str
+
+
+class VaultRetrieveBody(BaseModel):
+    user_id: str
+    category: str
+
+
+# ---------------------------------------------------------------------------
+# State (in-memory vault, persisted ledger, shared cipher and audit)
+# ---------------------------------------------------------------------------
+
+_ledger: Optional[ConsentLedger] = None
+_cipher: Optional[NeuralDataCipher] = None
+_audit: Optional[AuditLogger] = None
+_consent: Optional[ConsentManager] = None
+_vault: Optional[NeuralDataVault] = None
+
+
+def _get_ledger() -> ConsentLedger:
+    if _ledger is None:
+        raise RuntimeError("API state not initialized")
+    return _ledger
+
+
+def _get_cipher() -> NeuralDataCipher:
+    if _cipher is None:
+        raise RuntimeError("API state not initialized")
+    return _cipher
+
+
+def _get_audit() -> AuditLogger:
+    if _audit is None:
+        raise RuntimeError("API state not initialized")
+    return _audit
+
+
+def _get_consent() -> ConsentManager:
+    if _consent is None:
+        raise RuntimeError("API state not initialized")
+    return _consent
+
+
+def _get_vault() -> NeuralDataVault:
+    if _vault is None:
+        raise RuntimeError("API state not initialized")
+    return _vault
+
+
+def _has_consent_from_ledger(user_id: str, category: str) -> bool:
+    """True if the last consent event for (user_id, category) is grant."""
+    ledger = _get_ledger()
+    events = [e for e in ledger.history(user_id) if e.get("category") == category]
+    return bool(events and events[-1].get("type") == "grant")
+
+
+def _init_state() -> None:
+    global _ledger, _cipher, _audit, _consent, _vault
+    key = os.environ.get("NEUROGUARD_ENCRYPTION_KEY")
+    if key:
+        try:
+            key_b = base64.urlsafe_b64decode(key)
+        except Exception:
+            key_b = NeuralDataCipher.generate_key()
+    else:
+        key_b = NeuralDataCipher.generate_key()
+    _cipher = NeuralDataCipher(key=key_b)
+    ledger_path = os.environ.get("NEUROGUARD_LEDGER_PATH")
+    _ledger = ConsentLedger(path=ledger_path)
+    _audit = AuditLogger(use_hash_chain=True)
+    _consent = ConsentManager()
+    _vault = NeuralDataVault(consent_manager=_consent, audit_logger=_audit)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _init_state()
+    yield
+    # optional teardown
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="NeuroGuard API",
+        description="Local REST API for encryption, consent, vault, and compliance",
+        version="0.1.0",
+        lifespan=_lifespan,
+    )
+
+    @app.get("/health")
+    def health() -> Dict[str, str]:
+        return {"status": "ok"}
+
+    # ---------------------------------------------------------------------------
+    # Consent
+    # ---------------------------------------------------------------------------
+
+    @app.post("/consent/grant")
+    def consent_grant(body: ConsentBody) -> Dict[str, Any]:
+        ledger = _get_ledger()
+        ledger.record_grant(
+            body.user_id, body.category,
+            actor=body.actor or "user",
+            reason=body.reason,
+        )
+        return {"ok": True, "user_id": body.user_id, "category": body.category}
+
+    @app.post("/consent/revoke")
+    def consent_revoke(body: ConsentBody) -> Dict[str, Any]:
+        ledger = _get_ledger()
+        ledger.record_revoke(
+            body.user_id, body.category,
+            actor=body.actor or "user",
+            reason=body.reason,
+        )
+        return {"ok": True, "user_id": body.user_id, "category": body.category}
+
+    # ---------------------------------------------------------------------------
+    # Vault (check consent from ledger; encrypt/decrypt; audit)
+    # ---------------------------------------------------------------------------
+
+    @app.post("/vault/store")
+    def vault_store(body: VaultStoreBody) -> Dict[str, Any]:
+        user_id, category, plaintext_base64 = body.user_id, body.category, body.plaintext_base64
+        if not _has_consent_from_ledger(user_id, category):
+            raise HTTPException(status_code=403, detail="Consent not granted for this user and category")
+        try:
+            plaintext = base64.b64decode(plaintext_base64)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64: {e}") from e
+        cipher = _get_cipher()
+        audit = _get_audit()
+        vault = _get_vault()
+        encrypted = cipher.encrypt(plaintext)
+        vault.store(user_id, category, encrypted)
+        audit.log(AuditAction.ENCRYPT, actor=user_id, resource=category, outcome="success", size_bytes=len(encrypted))
+        return {"ok": True, "user_id": user_id, "category": category}
+
+    @app.post("/vault/retrieve")
+    def vault_retrieve(body: VaultRetrieveBody) -> Dict[str, Any]:
+        user_id, category = body.user_id, body.category
+        if not _has_consent_from_ledger(user_id, category):
+            raise HTTPException(status_code=403, detail="Consent not granted for this user and category")
+        vault = _get_vault()
+        encrypted = vault.get_encrypted(user_id, category)
+        if encrypted is None:
+            raise HTTPException(status_code=404, detail="No data for this user and category")
+        cipher = _get_cipher()
+        audit = _get_audit()
+        try:
+            plaintext = cipher.decrypt(encrypted)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Decryption failed") from e
+        audit.log(
+            AuditAction.VAULT_RETRIEVE,
+            actor=user_id,
+            resource=category,
+            outcome="success",
+            size_bytes=len(plaintext),
+        )
+        return {"ok": True, "plaintext_base64": base64.b64encode(plaintext).decode("ascii")}
+
+    # ---------------------------------------------------------------------------
+    # Compliance
+    # ---------------------------------------------------------------------------
+
+    def _compliance_data(
+        user_id: Optional[str],
+    ) -> Dict[str, Any]:
+        cipher = _get_cipher()
+        consent = _get_consent()
+        audit = _get_audit()
+        vault = _get_vault()
+        report = evaluate(
+            encryption_engine=cipher,
+            consent_manager=consent,
+            audit_logger=audit,
+            vault=vault,
+        )
+        ledger = _get_ledger()
+        consent_chain_ok = ledger.verify_chain()
+        audit_chain_ok = audit.verify_chain()
+        out: Dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "privacy_score": {
+                "score": report.score,
+                "risk_level": report.risk_level.value,
+                "breakdown": report.breakdown,
+                "recommendations": report.recommendations,
+            },
+            "consent_ledger_verify_chain": consent_chain_ok,
+            "audit_logger_verify_chain": audit_chain_ok,
+        }
+        if user_id is not None:
+            out["consent_history"] = ledger.history(user_id)
+        return out
+
+    @app.get("/compliance/report")
+    def compliance_report(
+        user_id: Optional[str] = Query(None, description="Filter consent ledger history by user"),
+    ) -> Dict[str, Any]:
+        return _compliance_data(user_id)
+
+    @app.get("/compliance/report.pdf")
+    def compliance_report_pdf(
+        user_id: Optional[str] = Query(None, description="Filter consent ledger history by user"),
+    ) -> Response:
+        report = _compliance_data(user_id)
+        pdf_bytes = generate_compliance_pdf(report, user_id)
+        filename = f"neuroguard_compliance_report_{user_id or 'all'}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    return app
+
+
+# App instance for uvicorn
+app = create_app()
+
+
+def main() -> None:
+    import uvicorn
+    uvicorn.run("neuroguard.api.app:app", host="127.0.0.1", port=8000, reload=False)
+
+
+if __name__ == "__main__":
+    main()

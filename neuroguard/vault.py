@@ -8,7 +8,7 @@ Every operation is audited; plaintext is never logged.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 from neuroguard.audit import AuditAction, AuditLogger
 from neuroguard.consent import ConsentManager
@@ -95,6 +95,15 @@ class NeuralDataVault:
             size_bytes=len(payload),
         )
         return payload
+
+    def get_encrypted(self, user_id: str, category: str) -> Optional[bytes]:
+        """
+        Return encrypted payload for (user_id, category) without consent check.
+        Returns None if not found. For API use when consent is enforced externally.
+        """
+        if user_id not in self._store or category not in self._store[user_id]:
+            return None
+        return self._store[user_id][category]
 
     def delete(self, user_id: str) -> None:
         """

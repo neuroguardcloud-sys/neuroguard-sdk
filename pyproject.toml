@@ -23,13 +23,20 @@ classifiers = [
 ]
 dependencies = [
     "cryptography>=42.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "reportlab>=4.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "httpx>=0.26.0",
 ]
+
+[project.scripts]
+neuroguard-api = "neuroguard.api.app:main"
 
 [project.urls]
 Repository = "https://github.com/neuroguard/neuroguard-sdk"
