@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, Optional, Set
 
+from neuroguard.consent.ledger import ConsentLedger
+
 
 class ConsentScope(str, Enum):
     """Scope of data use that requires consent."""
@@ -50,9 +52,15 @@ class ConsentManager:
     check consent for the required scope, and record grants/revocations.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        consent_ledger: Optional["ConsentLedger"] = None,
+        ledger_user_id: str = "default",
+    ) -> None:
         self._consents: Dict[ConsentScope, ConsentRecord] = {}
         self._category_consents: Dict[str, bool] = {}  # category -> granted
+        self._consent_ledger = consent_ledger
+        self._ledger_user_id = ledger_user_id
 
     def grant(self, scope: ConsentScope, metadata: Optional[Dict[str, str]] = None) -> ConsentRecord:
         """Record explicit consent for a scope."""
@@ -64,6 +72,8 @@ class ConsentManager:
             metadata=metadata or {},
         )
         self._consents[scope] = record
+        if self._consent_ledger is not None:
+            self._consent_ledger.record_grant(self._ledger_user_id, scope.value)
         return record
 
     def revoke(self, scope: ConsentScope) -> ConsentRecord:
@@ -76,6 +86,8 @@ class ConsentManager:
             revoked_at=now,
         )
         self._consents[scope] = record
+        if self._consent_ledger is not None:
+            self._consent_ledger.record_revoke(self._ledger_user_id, scope.value)
         return record
 
     def has_consent(self, scope: ConsentScope) -> bool:
@@ -106,10 +118,14 @@ class ConsentManager:
     def grant_category(self, category: str) -> None:
         """Record explicit consent for a data category (e.g. for vault retrieve)."""
         self._category_consents[category] = True
+        if self._consent_ledger is not None:
+            self._consent_ledger.record_grant(self._ledger_user_id, category)
 
     def revoke_category(self, category: str) -> None:
         """Revoke consent for a data category."""
         self._category_consents[category] = False
+        if self._consent_ledger is not None:
+            self._consent_ledger.record_revoke(self._ledger_user_id, category)
 
     def has_consent_for_category(self, category: str) -> bool:
         """Return True if consent is granted for the given category."""
