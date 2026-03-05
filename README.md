@@ -1,5 +1,35 @@
 # NeuroGuard SDK
 
+Privacy infrastructure for neural and biometric data.
+
+NeuroGuard is a developer-first privacy SDK that protects sensitive neural,
+biometric, and cognitive data **before it leaves the device** through:
+
+• On-device encryption  
+• Consent enforcement  
+• Tamper-evident audit logging  
+• Local privacy API  
+• Compliance reporting
+
+The project is designed for the emerging **neurotechnology, BCI, and AI-human interface ecosystem**.
+
+---
+
+## Why NeuroGuard Exists
+
+Neural interfaces, biometric sensors, and cognitive AI systems generate extremely sensitive data.
+
+Traditional security models protect data **after it reaches servers**.
+
+NeuroGuard protects the data **before it leaves the device**.
+
+This enables:
+
+• privacy-first AI systems  
+• regulatory compliance (GDPR / biometric laws)  
+• trusted neurotechnology platforms  
+• secure human-machine interfaces
+
 Privacy infrastructure for neural and biometric data. NeuroGuard protects sensitive data **before it leaves the device** via encryption, consent management, and audit logging.
 
 ## Architecture
