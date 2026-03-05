@@ -34,6 +34,8 @@ This enables:
 
 Privacy infrastructure for neural and biometric data. NeuroGuard protects sensitive data **before it leaves the device** via encryption, consent management, and audit logging.
 
+**Legal:** [Disclaimer](docs/DISCLAIMER.md) · [Terms of Use](legal/TERMS_OF_USE.md)
+
 ## Architecture
 
 ```
@@ -211,6 +213,9 @@ curl -s "http://127.0.0.1:8000/compliance/report?user_id=alice"
 curl -s -o report.pdf "http://127.0.0.1:8000/compliance/report.pdf?user_id=alice"
 # Without user_id: filename is neuroguard_compliance_report_all.pdf
 curl -s -o report_all.pdf "http://127.0.0.1:8000/compliance/report.pdf"
+
+# Evidence bundle (ZIP of PDF, JSON report, consent ledger, audit log, hash chain proof)
+curl -s "http://127.0.0.1:8000/compliance/evidence.zip?user_id=u1" --output evidence.zip
 ```
 
 API docs: `http://127.0.0.1:8000/docs` (Swagger UI).

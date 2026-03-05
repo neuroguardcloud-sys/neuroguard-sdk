@@ -7,15 +7,20 @@ Local-first: vault in-memory, consent ledger persisted to ~/.neuroguard/consent_
 from __future__ import annotations
 
 import base64
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from neuroguard.db.schema import init_db
+from neuroguard.api.vault_routes import router as vault_router
+from neuroguard.api.settings_routes import router as settings_router
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from neuroguard.api.evidence_bundle import generate_evidence_bundle
 from neuroguard.api.pdf_report import generate_compliance_pdf
 
 from neuroguard import NeuralDataCipher, ConsentManager, AuditLogger, NeuralDataVault
@@ -114,9 +119,10 @@ def _init_state() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    """Startup: init DB and app state; teardown optional."""
+    init_db()
     _init_state()
     yield
-    # optional teardown
 
 
 def create_app() -> FastAPI:
@@ -126,6 +132,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=_lifespan,
     )
+
+    # Register all routers and routes before returning (no early return)
+    app.include_router(vault_router, prefix="/vault2")
+    app.include_router(settings_router)
 
     @app.get("/health")
     def health() -> Dict[str, str]:
@@ -251,6 +261,32 @@ def create_app() -> FastAPI:
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/compliance/evidence.zip")
+    def compliance_evidence_zip(
+        user_id: Optional[str] = Query(None, description="Filter consent ledger by user"),
+    ) -> Response:
+        report = _compliance_data(user_id)
+        ledger = _get_ledger()
+        audit = _get_audit()
+        consent_ledger_json = ledger.export_json(user_id)
+        audit_log_json = json.dumps(
+            [e.to_dict() for e in audit.get_events()],
+            indent=2,
+            default=str,
+        )
+        bundle_bytes = generate_evidence_bundle(
+            report,
+            user_id,
+            consent_ledger_json=consent_ledger_json,
+            audit_log_json=audit_log_json,
+        )
+        filename = f"neuroguard_evidence_bundle_{user_id or 'all'}.zip"
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 

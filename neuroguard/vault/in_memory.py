@@ -1,7 +1,7 @@
 """
-Secure storage for encrypted neural data.
+In-memory secure vault for encrypted neural data.
 
-Simulates on-device vault: store/retrieve only encrypted payloads,
+Used by the main API: store/retrieve only encrypted payloads,
 retrieve only when consent is granted for the requested category.
 Every operation is audited; plaintext is never logged.
 """
