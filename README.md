@@ -7,6 +7,15 @@ Privacy infrastructure for neural and biometric data.
 NeuroGuard is a developer-first privacy SDK that protects sensitive neural,
 biometric, and cognitive data **before it leaves the device** through:
 
+## Quickstart
+
+```bash
+python -m venv .venv
+# Windows
+.\.venv\Scripts\activate
+python -m pip install -e .
+python -m neuroguard.api
+
 • On-device encryption  
 • Consent enforcement  
 • Tamper-evident audit logging  
