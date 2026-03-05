@@ -25,6 +25,19 @@ python -m pip install -e .
 python -m neuroguard.api
 ---
 
+## Quickstart
+
+```bash
+python -m venv .venv
+
+# Windows
+.\.venv\Scripts\activate
+
+python -m pip install -e .
+
+python -m neuroguard.api
+```
+
 ## Why NeuroGuard Exists
 
 Neural interfaces, biometric sensors, and cognitive AI systems generate extremely sensitive data.
