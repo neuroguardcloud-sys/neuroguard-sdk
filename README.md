@@ -1,5 +1,7 @@
 # NeuroGuard SDK
 
+Project roadmap → [ROADMAP](ROADMAP.md)
+
 Privacy infrastructure for neural and biometric data.
 
 NeuroGuard is a developer-first privacy SDK that protects sensitive neural,
