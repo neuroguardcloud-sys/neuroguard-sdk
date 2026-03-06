@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from neuroguard.api.app import create_app
 from neuroguard.api_keys import clear_store as clear_api_keys_store
 from neuroguard.tenants import clear_store as clear_tenants_store
+from neuroguard.usage_meter import clear_store as clear_usage_store
 
 
 @pytest.fixture
@@ -30,9 +31,11 @@ def api_client(temp_ledger_path):
     """TestClient with temp ledger path so tests don't touch ~/.neuroguard."""
     clear_api_keys_store()
     clear_tenants_store()
+    clear_usage_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
+    os.environ["NEUROGUARD_USAGE_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as client:
@@ -41,6 +44,7 @@ def api_client(temp_ledger_path):
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
+        os.environ.pop("NEUROGUARD_USAGE_PATH", None)
 
 
 @pytest.fixture
@@ -48,9 +52,11 @@ def api_client_with_api_key_required(temp_ledger_path):
     """TestClient with API key auth required (NEUROGUARD_API_KEYS set)."""
     clear_api_keys_store()
     clear_tenants_store()
+    clear_usage_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
+    os.environ["NEUROGUARD_USAGE_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
     try:
         app = create_app()
@@ -60,6 +66,7 @@ def api_client_with_api_key_required(temp_ledger_path):
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
+        os.environ.pop("NEUROGUARD_USAGE_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 
@@ -553,4 +560,36 @@ def test_admin_deactivate_tenant_unknown_returns_404(api_client: TestClient) -> 
     """POST /admin/tenants/deactivate with unknown tenant_id returns 404."""
     r = api_client.post("/admin/tenants/deactivate", json={"tenant_id": "nonexistent_tenant_id"})
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Admin usage metering
+# ---------------------------------------------------------------------------
+
+
+def test_admin_usage_list_empty_then_after_requests(api_client: TestClient) -> None:
+    """GET /admin/usage returns usage dict; after dashboard call, default tenant has dashboard_view."""
+    r = api_client.get("/admin/usage")
+    assert r.status_code == 200
+    data = r.json()
+    assert "usage" in data
+    assert data["usage"] == {}
+    api_client.get("/dashboard")
+    api_client.get("/dashboard")
+    r2 = api_client.get("/admin/usage")
+    assert r2.status_code == 200
+    usage = r2.json()["usage"]
+    assert "default" in usage
+    assert usage["default"]["dashboard_view"] == 2
+
+
+def test_admin_usage_tenant_id(api_client: TestClient) -> None:
+    """GET /admin/usage/{tenant_id} returns usage for that tenant."""
+    api_client.post("/security/check", json={"consent_present": True, "encryption_enabled": True, "operation_type": "read"})
+    r = api_client.get("/admin/usage/default")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["tenant_id"] == "default"
+    assert "usage" in data
+    assert data["usage"]["security_check"] == 1
 

@@ -34,6 +34,7 @@ from neuroguard.vault.backend import get_backend
 from neuroguard.api.auth import require_api_key
 from neuroguard.api_keys import create_key as create_api_key, list_keys as list_api_keys, revoke_key as revoke_api_key
 from neuroguard.tenants import create_tenant, deactivate_tenant, get_tenant, list_tenants
+from neuroguard.usage_meter import get_usage, increment_usage, list_usage
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -292,6 +293,7 @@ def create_app() -> FastAPI:
         tenant_id: str = Depends(require_api_key),
     ) -> Dict[str, Any]:
         """Developer dashboard: summary of current system state (in-memory). Tenant-scoped when API key set."""
+        increment_usage(tenant_id, "dashboard_view")
         return _build_dashboard_data(tenant_id=tenant_id)
 
     @app.get("/dashboard/export")
@@ -299,6 +301,7 @@ def create_app() -> FastAPI:
         tenant_id: str = Depends(require_api_key),
     ) -> Response:
         """Export dashboard data as JSON download. Tenant-scoped when API key set."""
+        increment_usage(tenant_id, "dashboard_export")
         data = _build_dashboard_data(tenant_id=tenant_id)
         return Response(
             content=json.dumps(data, indent=2, default=str),
@@ -370,9 +373,29 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Tenant not found or already deactivated")
         return {"ok": True}
 
+    # ---------------------------------------------------------------------------
+    # Admin: Usage metering (protected)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/admin/usage")
+    def admin_list_usage(
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """List usage counters for all tenants."""
+        return {"usage": list_usage()}
+
+    @app.get("/admin/usage/{tenant_id_param}")
+    def admin_get_usage(
+        tenant_id_param: str,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Get usage counters for a specific tenant."""
+        return {"tenant_id": tenant_id_param, "usage": get_usage(tenant_id_param)}
+
     @app.get("/lineage/{data_id}/export")
     def get_lineage_export(data_id: str) -> Response:
         """Export full lineage record for data_id as JSON download. 404 if missing."""
+        increment_usage(None, "lineage_export")
         tracker = _get_lineage_tracker()
         lineage = tracker.get_lineage(data_id)
         if lineage is None:
@@ -386,6 +409,7 @@ def create_app() -> FastAPI:
     @app.post("/security/check")
     def security_check(body: SecurityCheckBody) -> Dict[str, Any]:
         """Cognitive Firewall: evaluate whether a sensitive operation should be allowed."""
+        increment_usage(None, "security_check")
         return check_operation(
             consent_present=body.consent_present,
             encryption_enabled=body.encryption_enabled,
@@ -435,6 +459,7 @@ def create_app() -> FastAPI:
         vault = _get_vault()
         encrypted = cipher.encrypt(plaintext)
         vault.store(user_id, category, encrypted)
+        increment_usage(None, "vault_store")
         audit.log(AuditAction.ENCRYPT, actor=user_id, resource=category, outcome="success", size_bytes=len(encrypted))
         data_id = _vault_data_id(user_id, category)
         _get_lineage_tracker().create(
@@ -468,6 +493,7 @@ def create_app() -> FastAPI:
         )
         data_id = _vault_data_id(user_id, category)
         _get_lineage_tracker().append_event(data_id, "read", actor=user_id)
+        increment_usage(None, "vault_retrieve")
         return {"ok": True, "plaintext_base64": base64.b64encode(plaintext).decode("ascii")}
 
     # ---------------------------------------------------------------------------
