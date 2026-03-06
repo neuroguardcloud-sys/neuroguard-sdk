@@ -191,3 +191,118 @@ def test_privacy_score_full_setup_returns_100(api_client: TestClient) -> None:
     assert data["status"] == "low"
     assert data["reasons"] == []
 
+
+def test_dashboard_returns_expected_shape(api_client: TestClient) -> None:
+    """GET /dashboard returns 200 with encrypted_records, consent_events, audit_events, lineage_records, privacy_score."""
+    r = api_client.get("/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert "encrypted_records" in data
+    assert "consent_events" in data
+    assert "audit_events" in data
+    assert "lineage_records" in data
+    assert "privacy_score" in data
+    assert isinstance(data["encrypted_records"], int)
+    assert isinstance(data["consent_events"], int)
+    assert isinstance(data["audit_events"], int)
+    assert isinstance(data["lineage_records"], int)
+    ps = data["privacy_score"]
+    assert "score" in ps and "status" in ps and "reasons" in ps
+
+
+def test_dashboard_counts_reflect_usage(api_client: TestClient) -> None:
+    """After consent + vault store, dashboard shows non-zero encrypted_records, consent_events, lineage_records."""
+    r_before = api_client.get("/dashboard")
+    assert r_before.status_code == 200
+    before = r_before.json()
+
+    api_client.post("/consent/grant", json={"user_id": "dash", "category": "cat", "actor": "user"})
+    api_client.post(
+        "/vault/store",
+        json={
+            "user_id": "dash",
+            "category": "cat",
+            "plaintext_base64": base64.b64encode(b"x").decode("ascii"),
+        },
+    )
+
+    r_after = api_client.get("/dashboard")
+    assert r_after.status_code == 200
+    after = r_after.json()
+    assert after["encrypted_records"] == before["encrypted_records"] + 1
+    assert after["consent_events"] >= before["consent_events"] + 1
+    assert after["lineage_records"] == before["lineage_records"] + 1
+    assert after["audit_events"] >= before["audit_events"]
+
+
+def test_security_check_returns_expected_shape(api_client: TestClient) -> None:
+    """POST /security/check returns 200 with allowed, risk_level, and reason."""
+    r = api_client.post(
+        "/security/check",
+        json={
+            "consent_present": True,
+            "encryption_enabled": True,
+            "operation_type": "read",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "allowed" in data
+    assert "risk_level" in data
+    assert "reason" in data
+    assert isinstance(data["allowed"], bool)
+    assert data["risk_level"] in ("low", "moderate", "high")
+    assert isinstance(data["reason"], str)
+
+
+def test_security_check_blocked_without_consent(api_client: TestClient) -> None:
+    """POST /security/check with consent_present=False returns allowed=False and high risk."""
+    r = api_client.post(
+        "/security/check",
+        json={
+            "consent_present": False,
+            "encryption_enabled": True,
+            "operation_type": "export",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["allowed"] is False
+    assert data["risk_level"] == "high"
+    assert "consent" in data["reason"].lower()
+
+
+def test_dashboard_export_returns_json_download(api_client: TestClient) -> None:
+    """GET /dashboard/export returns 200 with same dashboard data as JSON and attachment header."""
+    r = api_client.get("/dashboard/export")
+    assert r.status_code == 200
+    assert "application/json" in r.headers.get("content-type", "")
+    assert "attachment" in r.headers.get("content-disposition", "").lower()
+    data = r.json()
+    assert "encrypted_records" in data
+    assert "consent_events" in data
+    assert "privacy_score" in data
+
+
+def test_lineage_export_returns_json_download(api_client: TestClient) -> None:
+    """GET /lineage/{data_id}/export returns 200 with lineage JSON download when record exists."""
+    api_client.post("/consent/grant", json={"user_id": "ex", "category": "cat", "actor": "user"})
+    api_client.post(
+        "/vault/store",
+        json={"user_id": "ex", "category": "cat", "plaintext_base64": base64.b64encode(b"x").decode("ascii")},
+    )
+    data_id = "ex:cat"
+    r = api_client.get(f"/lineage/{data_id}/export")
+    assert r.status_code == 200
+    assert "application/json" in r.headers.get("content-type", "")
+    assert "attachment" in r.headers.get("content-disposition", "").lower()
+    data = r.json()
+    assert data["data_id"] == data_id
+    assert "events" in data
+
+
+def test_lineage_export_missing_returns_404(api_client: TestClient) -> None:
+    """GET /lineage/{data_id}/export returns 404 when lineage record does not exist."""
+    r = api_client.get("/lineage/nonexistent:id/export")
+    assert r.status_code == 404
+

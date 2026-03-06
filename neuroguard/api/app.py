@@ -28,6 +28,7 @@ from neuroguard.audit import AuditAction
 from neuroguard.consent import ConsentLedger
 from neuroguard.lineage import DataLineage, LineageTracker
 from neuroguard.privacy_score import compute_simple_score, evaluate, is_encryption_enabled
+from neuroguard.security import check_operation
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -50,6 +51,12 @@ class VaultStoreBody(BaseModel):
 class VaultRetrieveBody(BaseModel):
     user_id: str
     category: str
+
+
+class SecurityCheckBody(BaseModel):
+    consent_present: bool
+    encryption_enabled: bool
+    operation_type: str
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +202,102 @@ def create_app() -> FastAPI:
             consent_enabled=consent_enabled,
             audit_enabled=audit_enabled,
             lineage_enabled=lineage_enabled,
+        )
+
+    def _build_dashboard_data() -> Dict[str, Any]:
+        """Build dashboard summary dict (shared by GET /dashboard and GET /dashboard/export)."""
+        encryption_enabled = False
+        consent_enabled = False
+        audit_enabled = False
+        lineage_enabled = False
+        try:
+            encryption_enabled = is_encryption_enabled(_get_cipher())
+        except RuntimeError:
+            pass
+        try:
+            _get_consent()
+            consent_enabled = True
+        except RuntimeError:
+            pass
+        try:
+            _get_audit()
+            audit_enabled = True
+        except RuntimeError:
+            pass
+        try:
+            _get_lineage_tracker()
+            lineage_enabled = True
+        except RuntimeError:
+            pass
+        privacy_score = compute_simple_score(
+            encryption_enabled=encryption_enabled,
+            consent_enabled=consent_enabled,
+            audit_enabled=audit_enabled,
+            lineage_enabled=lineage_enabled,
+        )
+        encrypted_records = 0
+        consent_events = 0
+        audit_events = 0
+        lineage_records = 0
+        try:
+            encrypted_records = _get_vault().count_records()
+        except RuntimeError:
+            pass
+        try:
+            consent_events = len(_get_ledger().history())
+        except RuntimeError:
+            pass
+        try:
+            audit_events = len(_get_audit().get_events())
+        except RuntimeError:
+            pass
+        try:
+            lineage_records = _get_lineage_tracker().record_count()
+        except RuntimeError:
+            pass
+        return {
+            "encrypted_records": encrypted_records,
+            "consent_events": consent_events,
+            "audit_events": audit_events,
+            "lineage_records": lineage_records,
+            "privacy_score": privacy_score,
+        }
+
+    @app.get("/dashboard")
+    def get_dashboard() -> Dict[str, Any]:
+        """Developer dashboard: summary of current system state (in-memory)."""
+        return _build_dashboard_data()
+
+    @app.get("/dashboard/export")
+    def get_dashboard_export() -> Response:
+        """Export dashboard data as JSON download."""
+        data = _build_dashboard_data()
+        return Response(
+            content=json.dumps(data, indent=2, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=\"dashboard.json\""},
+        )
+
+    @app.get("/lineage/{data_id}/export")
+    def get_lineage_export(data_id: str) -> Response:
+        """Export full lineage record for data_id as JSON download. 404 if missing."""
+        tracker = _get_lineage_tracker()
+        lineage = tracker.get_lineage(data_id)
+        if lineage is None:
+            raise HTTPException(status_code=404, detail="Lineage record not found")
+        return Response(
+            content=lineage.model_dump_json(indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=\"lineage_{data_id.replace(':', '-')}.json\""},
+        )
+
+    @app.post("/security/check")
+    def security_check(body: SecurityCheckBody) -> Dict[str, Any]:
+        """Cognitive Firewall: evaluate whether a sensitive operation should be allowed."""
+        return check_operation(
+            consent_present=body.consent_present,
+            encryption_enabled=body.encryption_enabled,
+            operation_type=body.operation_type,
         )
 
     # ---------------------------------------------------------------------------

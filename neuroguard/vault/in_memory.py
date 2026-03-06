@@ -58,6 +58,10 @@ class NeuralDataVault:
             size_bytes=len(encrypted_payload),
         )
 
+    def count_records(self) -> int:
+        """Return the number of stored (user_id, category) encrypted records."""
+        return sum(len(categories) for categories in self._store.values())
+
     def retrieve(self, user_id: str, category: str) -> bytes:
         """
         Retrieve encrypted payload for a user and category.

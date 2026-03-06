@@ -66,3 +66,7 @@ class LineageTracker:
     def get_lineage(self, data_id: str) -> Optional[DataLineage]:
         """Return the full lineage record for data_id, or None if not found."""
         return self._records.get(data_id)
+
+    def record_count(self) -> int:
+        """Return the number of lineage records."""
+        return len(self._records)
