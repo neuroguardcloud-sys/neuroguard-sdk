@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from neuroguard.db.schema import init_db
 from neuroguard.api.vault_routes import router as vault_router
 from neuroguard.api.settings_routes import router as settings_router
@@ -31,6 +31,7 @@ from neuroguard.privacy_score import compute_simple_score, evaluate, is_encrypti
 from neuroguard.security import check_operation
 from neuroguard.settings import load_settings
 from neuroguard.vault.backend import get_backend
+from neuroguard.api.auth import require_api_key
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -268,13 +269,17 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/dashboard")
-    def get_dashboard() -> Dict[str, Any]:
-        """Developer dashboard: summary of current system state (in-memory)."""
+    def get_dashboard(
+        _tenant: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Developer dashboard: summary of current system state (in-memory). Requires API key when configured."""
         return _build_dashboard_data()
 
     @app.get("/dashboard/export")
-    def get_dashboard_export() -> Response:
-        """Export dashboard data as JSON download."""
+    def get_dashboard_export(
+        _tenant: str = Depends(require_api_key),
+    ) -> Response:
+        """Export dashboard data as JSON download. Requires API key when configured."""
         data = _build_dashboard_data()
         return Response(
             content=json.dumps(data, indent=2, default=str),

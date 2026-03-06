@@ -36,6 +36,20 @@ def api_client(temp_ledger_path):
 
 
 @pytest.fixture
+def api_client_with_api_key_required(temp_ledger_path):
+    """TestClient with API key auth required (NEUROGUARD_API_KEYS set)."""
+    os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
+    os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
+    try:
+        app = create_app()
+        with TestClient(app) as client:
+            yield client
+    finally:
+        os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+        os.environ.pop("NEUROGUARD_API_KEYS", None)
+
+
+@pytest.fixture
 def api_client_file_backend(temp_ledger_path):
     """TestClient with file vault backend (temp settings + temp vault dir)."""
     vault_dir = tempfile.mkdtemp(prefix="neuroguard_vault_")
@@ -337,6 +351,47 @@ def test_lineage_export_missing_returns_404(api_client: TestClient) -> None:
     """GET /lineage/{data_id}/export returns 404 when lineage record does not exist."""
     r = api_client.get("/lineage/nonexistent:id/export")
     assert r.status_code == 404
+
+
+def test_dashboard_missing_api_key_returns_401(api_client_with_api_key_required: TestClient) -> None:
+    """When API keys are configured, GET /dashboard without X-API-Key returns 401."""
+    r = api_client_with_api_key_required.get("/dashboard")
+    assert r.status_code == 401
+    assert "api key" in r.json().get("detail", "").lower()
+
+
+def test_dashboard_invalid_api_key_returns_401(api_client_with_api_key_required: TestClient) -> None:
+    """When API keys are configured, GET /dashboard with invalid X-API-Key returns 401."""
+    r = api_client_with_api_key_required.get(
+        "/dashboard",
+        headers={"X-API-Key": "wrong-key"},
+    )
+    assert r.status_code == 401
+    assert "api key" in r.json().get("detail", "").lower()
+
+
+def test_dashboard_valid_api_key_success(api_client_with_api_key_required: TestClient) -> None:
+    """When API keys are configured, GET /dashboard with valid X-API-Key returns 200."""
+    r = api_client_with_api_key_required.get(
+        "/dashboard",
+        headers={"X-API-Key": "test-key-123"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "encrypted_records" in data
+    assert "privacy_score" in data
+
+
+def test_dashboard_export_valid_api_key_success(api_client_with_api_key_required: TestClient) -> None:
+    """When API keys are configured, GET /dashboard/export with valid X-API-Key returns 200."""
+    r = api_client_with_api_key_required.get(
+        "/dashboard/export",
+        headers={"X-API-Key": "test-key-123"},
+    )
+    assert r.status_code == 200
+    assert "application/json" in r.headers.get("content-type", "")
+    data = r.json()
+    assert "encrypted_records" in data
 
 
 def test_api_with_file_backend_store_retrieve_dashboard(api_client_file_backend: TestClient) -> None:
