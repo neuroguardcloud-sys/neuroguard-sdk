@@ -53,6 +53,7 @@ def client_with_test_app(temp_ledger_path):
     """NeuroGuardClient backed by the test app (no real HTTP)."""
     clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
+    os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as tc:
@@ -60,6 +61,7 @@ def client_with_test_app(temp_ledger_path):
             yield NeuroGuardClient(base_url="http://test", api_key=None, client=adapter)
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+        os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
 
 
 @pytest.fixture
@@ -67,6 +69,7 @@ def client_with_api_key(temp_ledger_path):
     """NeuroGuardClient with API key, backed by test app that requires keys."""
     clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
+    os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123"
     try:
         app = create_app()
@@ -75,6 +78,7 @@ def client_with_api_key(temp_ledger_path):
             yield NeuroGuardClient(base_url="http://test", api_key="test-key-123", client=adapter)
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+        os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 

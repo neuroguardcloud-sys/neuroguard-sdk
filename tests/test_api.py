@@ -29,12 +29,14 @@ def api_client(temp_ledger_path):
     """TestClient with temp ledger path so tests don't touch ~/.neuroguard."""
     clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
+    os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as client:
             yield client
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+        os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
 
 
 @pytest.fixture
@@ -42,6 +44,7 @@ def api_client_with_api_key_required(temp_ledger_path):
     """TestClient with API key auth required (NEUROGUARD_API_KEYS set)."""
     clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
+    os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
     try:
         app = create_app()
@@ -49,6 +52,7 @@ def api_client_with_api_key_required(temp_ledger_path):
             yield client
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+        os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 

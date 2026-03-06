@@ -1,5 +1,8 @@
 """Tests for managed API key module (create, list, revoke, validate)."""
 
+import os
+import tempfile
+
 import pytest
 
 from neuroguard.api_keys import (
@@ -8,6 +11,7 @@ from neuroguard.api_keys import (
     create_key,
     has_any_keys,
     list_keys,
+    reload_from_disk,
     revoke_key,
     validate_key,
 )
@@ -15,10 +19,12 @@ from neuroguard.api_keys import (
 
 @pytest.fixture(autouse=True)
 def clear_before_after():
-    """Isolate tests: clear managed key store before and after each test."""
+    """Isolate tests: clear managed key store before and after each test; disable persistence."""
+    os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     clear_store()
     yield
     clear_store()
+    os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
 
 
 def test_create_key_returns_record_with_expected_fields() -> None:
@@ -85,3 +91,67 @@ def test_has_any_keys() -> None:
     assert has_any_keys() is True
     revoke_key(record.key)
     assert has_any_keys() is True
+
+
+# ---------------------------------------------------------------------------
+# Persistence (JSON file)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def persisted_keys_path():
+    """Temp path for API keys JSON; persistence enabled for the test."""
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        os.environ["NEUROGUARD_API_KEYS_PATH"] = path
+        yield path
+    finally:
+        os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def test_persistence_across_reload(persisted_keys_path: str) -> None:
+    """After create_key and revoke_key, reload_from_disk(); list_keys and validate reflect persisted state."""
+    clear_store()
+    r1 = create_key("tenant-p")
+    r2 = create_key("tenant-p")
+    revoke_key(r1.key)
+    reload_from_disk()
+    keys = list_keys()
+    assert len(keys) == 1
+    assert keys[0].key == r2.key
+    assert keys[0].tenant_id == "tenant-p"
+    assert keys[0].is_active is True
+    assert validate_key(r1.key) is None
+    assert validate_key(r2.key) == "tenant-p"
+
+
+def test_revoked_keys_stay_revoked_after_reload(persisted_keys_path: str) -> None:
+    """Revoked key is still invalid after reload_from_disk()."""
+    clear_store()
+    record = create_key("tenant-r")
+    assert validate_key(record.key) == "tenant-r"
+    revoke_key(record.key)
+    assert validate_key(record.key) is None
+    reload_from_disk()
+    assert validate_key(record.key) is None
+    keys = list_keys(tenant_id="tenant-r")
+    assert len(keys) == 0
+
+
+def test_list_keys_after_reload(persisted_keys_path: str) -> None:
+    """Create several keys, reload, list_keys returns same set (and only active)."""
+    clear_store()
+    create_key("tenant-a")
+    create_key("tenant-a")
+    r3 = create_key("tenant-b")
+    revoke_key(r3.key)
+    reload_from_disk()
+    all_keys = list_keys()
+    assert len(all_keys) == 2
+    a_keys = list_keys(tenant_id="tenant-a")
+    assert len(a_keys) == 2
+    b_keys = list_keys(tenant_id="tenant-b")
+    assert len(b_keys) == 0
