@@ -35,6 +35,7 @@ from neuroguard.api.auth import require_api_key
 from neuroguard.api_keys import create_key as create_api_key, list_keys as list_api_keys, revoke_key as revoke_api_key
 from neuroguard.tenants import create_tenant, deactivate_tenant, get_tenant, list_tenants
 from neuroguard.usage_meter import get_usage, increment_usage, list_usage
+from neuroguard.plans import check_limit, get_plan, list_plan_definitions, set_plan
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -79,6 +80,10 @@ class CreateTenantBody(BaseModel):
 
 class DeactivateTenantBody(BaseModel):
     tenant_id: str
+
+
+class SetPlanBody(BaseModel):
+    plan_name: str
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +298,9 @@ def create_app() -> FastAPI:
         tenant_id: str = Depends(require_api_key),
     ) -> Dict[str, Any]:
         """Developer dashboard: summary of current system state (in-memory). Tenant-scoped when API key set."""
+        allowed, remaining, reason = check_limit(tenant_id, "dashboard_view")
+        if not allowed:
+            raise HTTPException(status_code=429, detail=reason)
         increment_usage(tenant_id, "dashboard_view")
         return _build_dashboard_data(tenant_id=tenant_id)
 
@@ -301,6 +309,9 @@ def create_app() -> FastAPI:
         tenant_id: str = Depends(require_api_key),
     ) -> Response:
         """Export dashboard data as JSON download. Tenant-scoped when API key set."""
+        allowed, remaining, reason = check_limit(tenant_id, "dashboard_export")
+        if not allowed:
+            raise HTTPException(status_code=429, detail=reason)
         increment_usage(tenant_id, "dashboard_export")
         data = _build_dashboard_data(tenant_id=tenant_id)
         return Response(
@@ -391,6 +402,37 @@ def create_app() -> FastAPI:
     ) -> Dict[str, Any]:
         """Get usage counters for a specific tenant."""
         return {"tenant_id": tenant_id_param, "usage": get_usage(tenant_id_param)}
+
+    # ---------------------------------------------------------------------------
+    # Admin: Plan enforcement (protected)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/admin/plans")
+    def admin_list_plans(
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """List built-in plan definitions (names and limits)."""
+        return {"plans": list_plan_definitions()}
+
+    @app.get("/admin/plans/{tenant_id_param}")
+    def admin_get_plan(
+        tenant_id_param: str,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Get the plan assigned to a tenant."""
+        return {"tenant_id": tenant_id_param, "plan": get_plan(tenant_id_param)}
+
+    @app.post("/admin/plans/{tenant_id_param}")
+    def admin_set_plan(
+        tenant_id_param: str,
+        body: SetPlanBody,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Assign a plan to a tenant."""
+        ok = set_plan(tenant_id_param, body.plan_name)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Unknown plan name")
+        return {"ok": True, "tenant_id": tenant_id_param, "plan": body.plan_name}
 
     @app.get("/lineage/{data_id}/export")
     def get_lineage_export(data_id: str) -> Response:

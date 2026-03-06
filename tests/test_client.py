@@ -13,6 +13,7 @@ from neuroguard.api_keys import clear_store as clear_api_keys_store
 from neuroguard.client import NeuroGuardClient
 from neuroguard.tenants import clear_store as clear_tenants_store
 from neuroguard.usage_meter import clear_store as clear_usage_store
+from neuroguard.plans import clear_store as clear_plans_store
 
 
 class _TestClientAdapter:
@@ -56,10 +57,12 @@ def client_with_test_app(temp_ledger_path):
     clear_api_keys_store()
     clear_tenants_store()
     clear_usage_store()
+    clear_plans_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_USAGE_PATH"] = ""
+    os.environ["NEUROGUARD_PLANS_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as tc:
@@ -70,6 +73,7 @@ def client_with_test_app(temp_ledger_path):
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_USAGE_PATH", None)
+        os.environ.pop("NEUROGUARD_PLANS_PATH", None)
 
 
 @pytest.fixture
@@ -78,10 +82,12 @@ def client_with_api_key(temp_ledger_path):
     clear_api_keys_store()
     clear_tenants_store()
     clear_usage_store()
+    clear_plans_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_USAGE_PATH"] = ""
+    os.environ["NEUROGUARD_PLANS_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123"
     try:
         app = create_app()
@@ -93,6 +99,7 @@ def client_with_api_key(temp_ledger_path):
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_USAGE_PATH", None)
+        os.environ.pop("NEUROGUARD_PLANS_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 

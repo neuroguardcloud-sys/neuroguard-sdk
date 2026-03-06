@@ -13,6 +13,7 @@ from neuroguard.api.app import create_app
 from neuroguard.api_keys import clear_store as clear_api_keys_store
 from neuroguard.tenants import clear_store as clear_tenants_store
 from neuroguard.usage_meter import clear_store as clear_usage_store
+from neuroguard.plans import clear_store as clear_plans_store
 
 
 @pytest.fixture
@@ -32,10 +33,12 @@ def api_client(temp_ledger_path):
     clear_api_keys_store()
     clear_tenants_store()
     clear_usage_store()
+    clear_plans_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_USAGE_PATH"] = ""
+    os.environ["NEUROGUARD_PLANS_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as client:
@@ -45,6 +48,7 @@ def api_client(temp_ledger_path):
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_USAGE_PATH", None)
+        os.environ.pop("NEUROGUARD_PLANS_PATH", None)
 
 
 @pytest.fixture
@@ -53,10 +57,12 @@ def api_client_with_api_key_required(temp_ledger_path):
     clear_api_keys_store()
     clear_tenants_store()
     clear_usage_store()
+    clear_plans_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_USAGE_PATH"] = ""
+    os.environ["NEUROGUARD_PLANS_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
     try:
         app = create_app()
@@ -67,6 +73,7 @@ def api_client_with_api_key_required(temp_ledger_path):
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_USAGE_PATH", None)
+        os.environ.pop("NEUROGUARD_PLANS_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 
@@ -592,4 +599,63 @@ def test_admin_usage_tenant_id(api_client: TestClient) -> None:
     assert data["tenant_id"] == "default"
     assert "usage" in data
     assert data["usage"]["security_check"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Admin plan enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_admin_plans_list(api_client: TestClient) -> None:
+    """GET /admin/plans returns built-in plan definitions."""
+    r = api_client.get("/admin/plans")
+    assert r.status_code == 200
+    data = r.json()
+    assert "plans" in data
+    assert "free" in data["plans"]
+    assert "builder" in data["plans"]
+    assert "growth" in data["plans"]
+    assert data["plans"]["free"]["dashboard_view"] == 10
+
+
+def test_admin_plans_get_and_set(api_client: TestClient) -> None:
+    """GET /admin/plans/{tenant_id} returns plan; POST sets plan."""
+    r = api_client.get("/admin/plans/default")
+    assert r.status_code == 200
+    assert r.json()["tenant_id"] == "default"
+    assert r.json()["plan"] == "free"
+    r2 = api_client.post("/admin/plans/default", json={"plan_name": "growth"})
+    assert r2.status_code == 200
+    assert r2.json()["plan"] == "growth"
+    r3 = api_client.get("/admin/plans/default")
+    assert r3.json()["plan"] == "growth"
+    r4 = api_client.post("/admin/plans/default", json={"plan_name": "invalid"})
+    assert r4.status_code == 400
+
+
+def test_dashboard_over_limit_returns_429(api_client: TestClient) -> None:
+    """When tenant (default) exceeds free plan dashboard_view limit, GET /dashboard returns 429."""
+    for _ in range(10):
+        api_client.get("/dashboard")
+    r = api_client.get("/dashboard")
+    assert r.status_code == 429
+    assert "limit" in r.json().get("detail", "").lower()
+
+
+def test_dashboard_export_over_limit_returns_429(api_client: TestClient) -> None:
+    """When tenant exceeds free plan dashboard_export limit, GET /dashboard/export returns 429."""
+    for _ in range(5):
+        api_client.get("/dashboard/export")
+    r = api_client.get("/dashboard/export")
+    assert r.status_code == 429
+
+
+def test_plan_change_restores_access(api_client: TestClient) -> None:
+    """After hitting limit, upgrading to growth allows dashboard again."""
+    for _ in range(10):
+        api_client.get("/dashboard")
+    assert api_client.get("/dashboard").status_code == 429
+    api_client.post("/admin/plans/default", json={"plan_name": "growth"})
+    r = api_client.get("/dashboard")
+    assert r.status_code == 200
 
