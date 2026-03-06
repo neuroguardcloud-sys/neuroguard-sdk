@@ -29,6 +29,8 @@ from neuroguard.consent import ConsentLedger
 from neuroguard.lineage import DataLineage, LineageTracker
 from neuroguard.privacy_score import compute_simple_score, evaluate, is_encryption_enabled
 from neuroguard.security import check_operation
+from neuroguard.settings import load_settings
+from neuroguard.vault.backend import get_backend
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -134,7 +136,9 @@ def _init_state() -> None:
     _ledger = ConsentLedger(path=ledger_path)
     _audit = AuditLogger(use_hash_chain=True)
     _consent = ConsentManager()
-    _vault = NeuralDataVault(consent_manager=_consent, audit_logger=_audit)
+    settings = load_settings()
+    backend = get_backend(settings)
+    _vault = NeuralDataVault(consent_manager=_consent, audit_logger=_audit, backend=backend)
     _lineage_tracker = LineageTracker()
 
 

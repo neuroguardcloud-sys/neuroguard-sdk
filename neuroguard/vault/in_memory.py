@@ -1,55 +1,44 @@
 """
 In-memory secure vault for encrypted neural data.
 
-Used by the main API: store/retrieve only encrypted payloads,
-retrieve only when consent is granted for the requested category.
-Every operation is audited; plaintext is never logged.
+Uses a pluggable backend (in-memory or file). Consent and audit are enforced here;
+storage is delegated to the backend.
 """
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Optional
 
 from neuroguard.audit import AuditAction, AuditLogger
 from neuroguard.consent import ConsentManager
+from neuroguard.vault.backend import InMemoryBackend, VaultBackend
 
 
 class NeuralDataVault:
     """
-    In-memory secure storage for encrypted neural/biometric payloads.
+    Secure storage for encrypted neural/biometric payloads.
 
     Data is keyed by user_id and category. Retrieve is allowed only when
-    consent is granted for that category. All operations are audited
-    (no plaintext in audit logs).
+    consent is granted for that category. All operations are audited.
+    Storage is delegated to a pluggable backend (in_memory or file).
     """
 
-    def __init__(self, consent_manager: ConsentManager, audit_logger: AuditLogger) -> None:
-        """
-        Initialize the vault.
-
-        Args:
-            consent_manager: Used to check category consent before retrieve.
-            audit_logger: Used to record every store/retrieve/delete (no plaintext).
-        """
+    def __init__(
+        self,
+        consent_manager: ConsentManager,
+        audit_logger: AuditLogger,
+        backend: Optional[VaultBackend] = None,
+    ) -> None:
         if not isinstance(consent_manager, ConsentManager):
             raise TypeError("consent_manager must be a ConsentManager")
         if not isinstance(audit_logger, AuditLogger):
             raise TypeError("audit_logger must be an AuditLogger")
-
         self._consent = consent_manager
         self._audit = audit_logger
-        self._store: Dict[str, Dict[str, bytes]] = {}  # user_id -> { category -> encrypted_payload }
+        self._backend = backend if backend is not None else InMemoryBackend()
 
     def store(self, user_id: str, category: str, encrypted_payload: bytes) -> None:
-        """
-        Store encrypted neural data for a user and category.
-
-        Overwrites any existing payload for the same user_id and category.
-        Logs an audit event (user_id, category, size only; no plaintext).
-        """
-        if user_id not in self._store:
-            self._store[user_id] = {}
-        self._store[user_id][category] = encrypted_payload
+        self._backend.store(user_id, category, encrypted_payload)
         self._audit.log(
             AuditAction.VAULT_STORE,
             actor=user_id,
@@ -59,17 +48,9 @@ class NeuralDataVault:
         )
 
     def count_records(self) -> int:
-        """Return the number of stored (user_id, category) encrypted records."""
-        return sum(len(categories) for categories in self._store.values())
+        return self._backend.count_records()
 
     def retrieve(self, user_id: str, category: str) -> bytes:
-        """
-        Retrieve encrypted payload for a user and category.
-
-        Raises PermissionError if consent is not granted for the category.
-        Raises KeyError if no data exists for that user_id or category.
-        Logs an audit event (no plaintext).
-        """
         if not self._consent.has_consent_for_category(category):
             self._audit.log(
                 AuditAction.VAULT_RETRIEVE,
@@ -80,7 +61,8 @@ class NeuralDataVault:
             )
             raise PermissionError(f"Consent not granted for category: {category}")
 
-        if user_id not in self._store or category not in self._store[user_id]:
+        payload = self._backend.get(user_id, category)
+        if payload is None:
             self._audit.log(
                 AuditAction.VAULT_RETRIEVE,
                 actor=user_id,
@@ -90,7 +72,6 @@ class NeuralDataVault:
             )
             raise KeyError(f"No data for user_id={user_id!r}, category={category!r}")
 
-        payload = self._store[user_id][category]
         self._audit.log(
             AuditAction.VAULT_RETRIEVE,
             actor=user_id,
@@ -101,30 +82,19 @@ class NeuralDataVault:
         return payload
 
     def get_encrypted(self, user_id: str, category: str) -> Optional[bytes]:
-        """
-        Return encrypted payload for (user_id, category) without consent check.
-        Returns None if not found. For API use when consent is enforced externally.
-        """
-        if user_id not in self._store or category not in self._store[user_id]:
-            return None
-        return self._store[user_id][category]
+        """Return encrypted payload for (user_id, category) without consent check. None if not found."""
+        return self._backend.get(user_id, category)
 
     def delete(self, user_id: str) -> None:
-        """
-        Delete all stored data for the given user_id.
-
-        No-op if user_id has no data. Logs an audit event.
-        """
-        had_data = user_id in self._store
-        if had_data:
-            num_categories = len(self._store[user_id])
-            del self._store[user_id]
-        else:
-            num_categories = 0
+        """Delete all stored data for the given user_id."""
+        n = self._backend.count_records()
+        self._backend.delete(user_id, None)
+        n_after = self._backend.count_records()
+        num_removed = n - n_after
         self._audit.log(
             AuditAction.VAULT_DELETE,
             actor=user_id,
             resource=user_id,
             outcome="success",
-            categories_removed=num_categories,
+            categories_removed=num_removed,
         )

@@ -1,7 +1,9 @@
 """Tests for the NeuroGuard FastAPI API."""
 
 import base64
+import json
 import os
+import shutil
 import tempfile
 
 import pytest
@@ -31,6 +33,36 @@ def api_client(temp_ledger_path):
             yield client
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+
+
+@pytest.fixture
+def api_client_file_backend(temp_ledger_path):
+    """TestClient with file vault backend (temp settings + temp vault dir)."""
+    vault_dir = tempfile.mkdtemp(prefix="neuroguard_vault_")
+    fd, settings_path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    settings = {
+        "vault_backend": "file",
+        "vault_store_path": vault_dir,
+        "ledger_path": "",
+        "strict_mode": False,
+        "telemetry_enabled": False,
+    }
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f)
+    os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
+    os.environ["NEUROGUARD_SETTINGS_PATH"] = settings_path
+    try:
+        app = create_app()
+        with TestClient(app) as client:
+            yield client
+    finally:
+        os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
+        os.environ.pop("NEUROGUARD_SETTINGS_PATH", None)
+        if os.path.isfile(settings_path):
+            os.remove(settings_path)
+        if os.path.isdir(vault_dir):
+            shutil.rmtree(vault_dir, ignore_errors=True)
 
 
 def test_health(api_client: TestClient) -> None:
@@ -305,4 +337,23 @@ def test_lineage_export_missing_returns_404(api_client: TestClient) -> None:
     """GET /lineage/{data_id}/export returns 404 when lineage record does not exist."""
     r = api_client.get("/lineage/nonexistent:id/export")
     assert r.status_code == 404
+
+
+def test_api_with_file_backend_store_retrieve_dashboard(api_client_file_backend: TestClient) -> None:
+    """With vault_backend=file, consent + vault store + retrieve and dashboard work."""
+    client = api_client_file_backend
+    client.post("/consent/grant", json={"user_id": "fb_user", "category": "neural", "actor": "user"})
+    client.post(
+        "/vault/store",
+        json={
+            "user_id": "fb_user",
+            "category": "neural",
+            "plaintext_base64": base64.b64encode(b"secret").decode("ascii"),
+        },
+    )
+    assert client.get("/dashboard").json()["encrypted_records"] == 1
+    r = client.post("/vault/retrieve", json={"user_id": "fb_user", "category": "neural"})
+    assert r.status_code == 200
+    assert base64.b64decode(r.json()["plaintext_base64"]) == b"secret"
+    assert client.get("/lineage/fb_user:neural").status_code == 200
 
