@@ -33,6 +33,7 @@ from neuroguard.settings import load_settings
 from neuroguard.vault.backend import get_backend
 from neuroguard.api.auth import require_api_key
 from neuroguard.api_keys import create_key as create_api_key, list_keys as list_api_keys, revoke_key as revoke_api_key
+from neuroguard.tenants import create_tenant, deactivate_tenant, get_tenant, list_tenants
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -69,6 +70,14 @@ class CreateApiKeyBody(BaseModel):
 
 class RevokeApiKeyBody(BaseModel):
     key: str
+
+
+class CreateTenantBody(BaseModel):
+    name: str
+
+
+class DeactivateTenantBody(BaseModel):
+    tenant_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +336,38 @@ def create_app() -> FastAPI:
         ok = revoke_api_key(body.key)
         if not ok:
             raise HTTPException(status_code=404, detail="Key not found or already revoked")
+        return {"ok": True}
+
+    # ---------------------------------------------------------------------------
+    # Admin: Tenant registry (protected)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/admin/tenants")
+    def admin_list_tenants(
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """List all tenants (active and inactive)."""
+        tenants = list_tenants(active_only=False)
+        return {"tenants": [t.to_dict() for t in tenants]}
+
+    @app.post("/admin/tenants")
+    def admin_create_tenant(
+        body: CreateTenantBody,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Create a new tenant. Returns tenant_id, name, created_at."""
+        record = create_tenant(body.name)
+        return {"ok": True, "tenant_id": record.tenant_id, "name": record.name, "created_at": record.created_at.isoformat()}
+
+    @app.post("/admin/tenants/deactivate")
+    def admin_deactivate_tenant(
+        body: DeactivateTenantBody,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Deactivate a tenant by tenant_id."""
+        ok = deactivate_tenant(body.tenant_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Tenant not found or already deactivated")
         return {"ok": True}
 
     @app.get("/lineage/{data_id}/export")

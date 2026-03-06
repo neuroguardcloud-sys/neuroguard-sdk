@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from neuroguard.api.app import create_app
 from neuroguard.api_keys import clear_store as clear_api_keys_store
+from neuroguard.tenants import clear_store as clear_tenants_store
 
 
 @pytest.fixture
@@ -28,8 +29,10 @@ def temp_ledger_path():
 def api_client(temp_ledger_path):
     """TestClient with temp ledger path so tests don't touch ~/.neuroguard."""
     clear_api_keys_store()
+    clear_tenants_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
+    os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as client:
@@ -37,14 +40,17 @@ def api_client(temp_ledger_path):
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
+        os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
 
 
 @pytest.fixture
 def api_client_with_api_key_required(temp_ledger_path):
     """TestClient with API key auth required (NEUROGUARD_API_KEYS set)."""
     clear_api_keys_store()
+    clear_tenants_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
+    os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
     try:
         app = create_app()
@@ -53,6 +59,7 @@ def api_client_with_api_key_required(temp_ledger_path):
     finally:
         os.environ.pop("NEUROGUARD_LEDGER_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS_PATH", None)
+        os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 
@@ -497,4 +504,53 @@ def test_managed_key_valid_for_dashboard(api_client: TestClient) -> None:
     r = api_client.get("/dashboard", headers={"X-API-Key": key})
     assert r.status_code == 200
     assert r.json()["tenant_id"] == "dashboard-tenant"
+
+
+# ---------------------------------------------------------------------------
+# Admin tenant registry
+# ---------------------------------------------------------------------------
+
+
+def test_admin_create_tenant_returns_tenant_id(api_client: TestClient) -> None:
+    """POST /admin/tenants with name returns 200 and tenant_id, name, created_at."""
+    r = api_client.post("/admin/tenants", json={"name": "Acme Inc"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("ok") is True
+    assert "tenant_id" in data
+    assert data["name"] == "Acme Inc"
+    assert "created_at" in data
+    assert "acme-inc_" in data["tenant_id"] or "acme_" in data["tenant_id"]
+
+
+def test_admin_list_tenants(api_client: TestClient) -> None:
+    """GET /admin/tenants returns list of tenants; after create, list includes new tenant."""
+    r = api_client.get("/admin/tenants")
+    assert r.status_code == 200
+    assert "tenants" in r.json()
+    assert r.json()["tenants"] == []
+    api_client.post("/admin/tenants", json={"name": "First"})
+    api_client.post("/admin/tenants", json={"name": "Second"})
+    r2 = api_client.get("/admin/tenants")
+    assert r2.status_code == 200
+    assert len(r2.json()["tenants"]) == 2
+
+
+def test_admin_deactivate_tenant(api_client: TestClient) -> None:
+    """POST /admin/tenants/deactivate marks tenant inactive; list still returns it with is_active false."""
+    create_r = api_client.post("/admin/tenants", json={"name": "To Deactivate"})
+    tenant_id = create_r.json()["tenant_id"]
+    r = api_client.post("/admin/tenants/deactivate", json={"tenant_id": tenant_id})
+    assert r.status_code == 200
+    assert r.json().get("ok") is True
+    list_r = api_client.get("/admin/tenants")
+    tenants = list_r.json()["tenants"]
+    found = next((t for t in tenants if t["tenant_id"] == tenant_id), None)
+    assert found is not None and found["is_active"] is False
+
+
+def test_admin_deactivate_tenant_unknown_returns_404(api_client: TestClient) -> None:
+    """POST /admin/tenants/deactivate with unknown tenant_id returns 404."""
+    r = api_client.post("/admin/tenants/deactivate", json={"tenant_id": "nonexistent_tenant_id"})
+    assert r.status_code == 404
 
