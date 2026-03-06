@@ -11,7 +11,7 @@ from typing import Optional
 
 from neuroguard.audit import AuditAction, AuditLogger
 from neuroguard.consent import ConsentManager
-from neuroguard.vault.backend import InMemoryBackend, VaultBackend
+from neuroguard.vault.backend import DEFAULT_TENANT, InMemoryBackend, VaultBackend
 
 
 class NeuralDataVault:
@@ -37,18 +37,25 @@ class NeuralDataVault:
         self._audit = audit_logger
         self._backend = backend if backend is not None else InMemoryBackend()
 
-    def store(self, user_id: str, category: str, encrypted_payload: bytes) -> None:
-        self._backend.store(user_id, category, encrypted_payload)
+    def store(
+        self,
+        user_id: str,
+        category: str,
+        encrypted_payload: bytes,
+        tenant_id: str = DEFAULT_TENANT,
+    ) -> None:
+        self._backend.store(user_id, category, encrypted_payload, tenant_id=tenant_id)
         self._audit.log(
             AuditAction.VAULT_STORE,
             actor=user_id,
             resource=category,
             outcome="success",
             size_bytes=len(encrypted_payload),
+            tenant_id=tenant_id,
         )
 
-    def count_records(self) -> int:
-        return self._backend.count_records()
+    def count_records(self, tenant_id: Optional[str] = None) -> int:
+        return self._backend.count_records(tenant_id)
 
     def retrieve(self, user_id: str, category: str) -> bytes:
         if not self._consent.has_consent_for_category(category):
@@ -58,10 +65,11 @@ class NeuralDataVault:
                 resource=category,
                 outcome="denied",
                 reason="consent_not_granted",
+                tenant_id=DEFAULT_TENANT,
             )
             raise PermissionError(f"Consent not granted for category: {category}")
 
-        payload = self._backend.get(user_id, category)
+        payload = self._backend.get(user_id, category, tenant_id=DEFAULT_TENANT)
         if payload is None:
             self._audit.log(
                 AuditAction.VAULT_RETRIEVE,
@@ -69,6 +77,7 @@ class NeuralDataVault:
                 resource=category,
                 outcome="error",
                 reason="not_found",
+                tenant_id=DEFAULT_TENANT,
             )
             raise KeyError(f"No data for user_id={user_id!r}, category={category!r}")
 
@@ -78,18 +87,24 @@ class NeuralDataVault:
             resource=category,
             outcome="success",
             size_bytes=len(payload),
+            tenant_id=DEFAULT_TENANT,
         )
         return payload
 
-    def get_encrypted(self, user_id: str, category: str) -> Optional[bytes]:
+    def get_encrypted(
+        self,
+        user_id: str,
+        category: str,
+        tenant_id: str = DEFAULT_TENANT,
+    ) -> Optional[bytes]:
         """Return encrypted payload for (user_id, category) without consent check. None if not found."""
-        return self._backend.get(user_id, category)
+        return self._backend.get(user_id, category, tenant_id=tenant_id)
 
-    def delete(self, user_id: str) -> None:
-        """Delete all stored data for the given user_id."""
-        n = self._backend.count_records()
-        self._backend.delete(user_id, None)
-        n_after = self._backend.count_records()
+    def delete(self, user_id: str, tenant_id: str = DEFAULT_TENANT) -> None:
+        """Delete all stored data for the given user_id in the given tenant."""
+        n = self._backend.count_records(tenant_id=tenant_id)
+        self._backend.delete(user_id, None, tenant_id=tenant_id)
+        n_after = self._backend.count_records(tenant_id=tenant_id)
         num_removed = n - n_after
         self._audit.log(
             AuditAction.VAULT_DELETE,
@@ -97,4 +112,5 @@ class NeuralDataVault:
             resource=user_id,
             outcome="success",
             categories_removed=num_removed,
+            tenant_id=tenant_id,
         )

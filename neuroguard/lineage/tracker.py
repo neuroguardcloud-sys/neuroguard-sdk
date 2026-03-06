@@ -25,12 +25,14 @@ class LineageTracker:
         *,
         encryption_status: Literal["encrypted", "plaintext", "unknown"] = "unknown",
         consent_verified: bool = False,
+        tenant_id: str = "default",
     ) -> DataLineage:
         """Create a new lineage record for the given data_id."""
         if data_id in self._records:
             return self._records[data_id]
         lineage = DataLineage(
             data_id=data_id,
+            tenant_id=tenant_id,
             encryption_status=encryption_status,
             consent_verified=consent_verified,
             events=[LineageEvent(event_type="create")],
@@ -67,6 +69,8 @@ class LineageTracker:
         """Return the full lineage record for data_id, or None if not found."""
         return self._records.get(data_id)
 
-    def record_count(self) -> int:
-        """Return the number of lineage records."""
-        return len(self._records)
+    def record_count(self, tenant_id: Optional[str] = None) -> int:
+        """Return the number of lineage records. If tenant_id is set, count only that tenant."""
+        if tenant_id is None:
+            return len(self._records)
+        return sum(1 for r in self._records.values() if r.tenant_id == tenant_id)

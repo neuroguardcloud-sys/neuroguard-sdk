@@ -29,6 +29,7 @@ class DataLineage(BaseModel):
     """Lineage record for a piece of neural or biometric data."""
 
     data_id: str = Field(..., description="Unique identifier for the data")
+    tenant_id: str = Field(default="default", description="Tenant scope for hosted use")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="When the lineage record was created",

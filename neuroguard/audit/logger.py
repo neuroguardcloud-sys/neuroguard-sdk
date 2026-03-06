@@ -101,9 +101,11 @@ class AuditLogger:
         self._stream.flush()
         return event
 
-    def get_events(self) -> list[AuditEvent]:
-        """Return all events recorded in this session (in-memory buffer)."""
-        return list(self._events)
+    def get_events(self, tenant_id: Optional[str] = None) -> list[AuditEvent]:
+        """Return events. If tenant_id is set, only events for that tenant (details.tenant_id or 'default')."""
+        if tenant_id is None:
+            return list(self._events)
+        return [e for e in self._events if e.details.get("tenant_id", "default") == tenant_id]
 
     def clear_events(self) -> None:
         """Clear the in-memory event buffer (does not affect stream)."""

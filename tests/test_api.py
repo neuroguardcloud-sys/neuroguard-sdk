@@ -239,10 +239,11 @@ def test_privacy_score_full_setup_returns_100(api_client: TestClient) -> None:
 
 
 def test_dashboard_returns_expected_shape(api_client: TestClient) -> None:
-    """GET /dashboard returns 200 with encrypted_records, consent_events, audit_events, lineage_records, privacy_score."""
+    """GET /dashboard returns 200 with tenant_id, encrypted_records, consent_events, audit_events, lineage_records, privacy_score."""
     r = api_client.get("/dashboard")
     assert r.status_code == 200
     data = r.json()
+    assert "tenant_id" in data
     assert "encrypted_records" in data
     assert "consent_events" in data
     assert "audit_events" in data
@@ -371,15 +372,32 @@ def test_dashboard_invalid_api_key_returns_401(api_client_with_api_key_required:
 
 
 def test_dashboard_valid_api_key_success(api_client_with_api_key_required: TestClient) -> None:
-    """When API keys are configured, GET /dashboard with valid X-API-Key returns 200."""
+    """When API keys are configured, GET /dashboard with valid X-API-Key returns 200 and tenant_id."""
     r = api_client_with_api_key_required.get(
         "/dashboard",
         headers={"X-API-Key": "test-key-123"},
     )
     assert r.status_code == 200
     data = r.json()
+    assert data["tenant_id"] == "test-key-123"
     assert "encrypted_records" in data
     assert "privacy_score" in data
+
+
+def test_tenant_isolated_dashboard(api_client_with_api_key_required: TestClient) -> None:
+    """Data stored via vault (default tenant) is not visible in another tenant's dashboard."""
+    client = api_client_with_api_key_required
+    client.post("/consent/grant", json={"user_id": "u1", "category": "cat", "actor": "user"})
+    client.post(
+        "/vault/store",
+        json={"user_id": "u1", "category": "cat", "plaintext_base64": base64.b64encode(b"x").decode("ascii")},
+    )
+    r = client.get("/dashboard", headers={"X-API-Key": "test-key-123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["tenant_id"] == "test-key-123"
+    assert data["encrypted_records"] == 0
+    assert data["lineage_records"] == 0
 
 
 def test_dashboard_export_valid_api_key_success(api_client_with_api_key_required: TestClient) -> None:

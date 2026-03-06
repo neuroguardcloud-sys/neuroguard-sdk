@@ -209,8 +209,8 @@ def create_app() -> FastAPI:
             lineage_enabled=lineage_enabled,
         )
 
-    def _build_dashboard_data() -> Dict[str, Any]:
-        """Build dashboard summary dict (shared by GET /dashboard and GET /dashboard/export)."""
+    def _build_dashboard_data(tenant_id: str = "default") -> Dict[str, Any]:
+        """Build dashboard summary dict. When tenant_id is set, counts are scoped to that tenant."""
         encryption_enabled = False
         consent_enabled = False
         audit_enabled = False
@@ -245,7 +245,7 @@ def create_app() -> FastAPI:
         audit_events = 0
         lineage_records = 0
         try:
-            encrypted_records = _get_vault().count_records()
+            encrypted_records = _get_vault().count_records(tenant_id=tenant_id)
         except RuntimeError:
             pass
         try:
@@ -253,14 +253,15 @@ def create_app() -> FastAPI:
         except RuntimeError:
             pass
         try:
-            audit_events = len(_get_audit().get_events())
+            audit_events = len(_get_audit().get_events(tenant_id=tenant_id))
         except RuntimeError:
             pass
         try:
-            lineage_records = _get_lineage_tracker().record_count()
+            lineage_records = _get_lineage_tracker().record_count(tenant_id=tenant_id)
         except RuntimeError:
             pass
         return {
+            "tenant_id": tenant_id,
             "encrypted_records": encrypted_records,
             "consent_events": consent_events,
             "audit_events": audit_events,
@@ -270,17 +271,17 @@ def create_app() -> FastAPI:
 
     @app.get("/dashboard")
     def get_dashboard(
-        _tenant: str = Depends(require_api_key),
+        tenant_id: str = Depends(require_api_key),
     ) -> Dict[str, Any]:
-        """Developer dashboard: summary of current system state (in-memory). Requires API key when configured."""
-        return _build_dashboard_data()
+        """Developer dashboard: summary of current system state (in-memory). Tenant-scoped when API key set."""
+        return _build_dashboard_data(tenant_id=tenant_id)
 
     @app.get("/dashboard/export")
     def get_dashboard_export(
-        _tenant: str = Depends(require_api_key),
+        tenant_id: str = Depends(require_api_key),
     ) -> Response:
-        """Export dashboard data as JSON download. Requires API key when configured."""
-        data = _build_dashboard_data()
+        """Export dashboard data as JSON download. Tenant-scoped when API key set."""
+        data = _build_dashboard_data(tenant_id=tenant_id)
         return Response(
             content=json.dumps(data, indent=2, default=str),
             media_type="application/json",
