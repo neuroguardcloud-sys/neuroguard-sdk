@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from neuroguard.api.app import create_app
+from neuroguard.api_keys import clear_store as clear_api_keys_store
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def temp_ledger_path():
 @pytest.fixture
 def api_client(temp_ledger_path):
     """TestClient with temp ledger path so tests don't touch ~/.neuroguard."""
+    clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     try:
         app = create_app()
@@ -38,6 +40,7 @@ def api_client(temp_ledger_path):
 @pytest.fixture
 def api_client_with_api_key_required(temp_ledger_path):
     """TestClient with API key auth required (NEUROGUARD_API_KEYS set)."""
+    clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
     try:
@@ -429,4 +432,65 @@ def test_api_with_file_backend_store_retrieve_dashboard(api_client_file_backend:
     assert r.status_code == 200
     assert base64.b64decode(r.json()["plaintext_base64"]) == b"secret"
     assert client.get("/lineage/fb_user:neural").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Admin API key management
+# ---------------------------------------------------------------------------
+
+
+def test_admin_create_api_key_returns_key(api_client: TestClient) -> None:
+    """POST /admin/api-keys with tenant_id returns 200 and a key (no env keys: auth off)."""
+    r = api_client.post("/admin/api-keys", json={"tenant_id": "tenant-a"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("ok") is True
+    assert "key" in data
+    assert data["tenant_id"] == "tenant-a"
+    assert data["key"].startswith("ng_")
+
+
+def test_admin_list_api_keys_filtered_by_tenant(api_client: TestClient) -> None:
+    """Create two keys for same tenant, list with key1 returns both; revoke key1, list with key2 returns one."""
+    create_r1 = api_client.post("/admin/api-keys", json={"tenant_id": "tenant-b"})
+    assert create_r1.status_code == 200
+    key1 = create_r1.json()["key"]
+    create_r2 = api_client.post(
+        "/admin/api-keys",
+        json={"tenant_id": "tenant-b"},
+        headers={"X-API-Key": key1},
+    )
+    assert create_r2.status_code == 200
+    key2 = create_r2.json()["key"]
+    r = api_client.get("/admin/api-keys", headers={"X-API-Key": key1})
+    assert r.status_code == 200
+    keys = r.json().get("keys", [])
+    assert len(keys) == 2
+    rev_r = api_client.post("/admin/api-keys/revoke", json={"key": key1}, headers={"X-API-Key": key2})
+    assert rev_r.status_code == 200
+    r2 = api_client.get("/admin/api-keys", headers={"X-API-Key": key2})
+    assert r2.status_code == 200
+    assert len(r2.json().get("keys", [])) == 1
+
+
+def test_admin_revoke_api_key_returns_404_for_unknown(api_client: TestClient) -> None:
+    """POST /admin/api-keys/revoke with unknown key returns 404."""
+    create_r = api_client.post("/admin/api-keys", json={"tenant_id": "tenant-c"})
+    key = create_r.json()["key"]
+    r = api_client.post(
+        "/admin/api-keys/revoke",
+        json={"key": "ng_nonexistent"},
+        headers={"X-API-Key": key},
+    )
+    assert r.status_code == 404
+
+
+def test_managed_key_valid_for_dashboard(api_client: TestClient) -> None:
+    """A key created via POST /admin/api-keys can be used for GET /dashboard."""
+    create_r = api_client.post("/admin/api-keys", json={"tenant_id": "dashboard-tenant"})
+    assert create_r.status_code == 200
+    key = create_r.json()["key"]
+    r = api_client.get("/dashboard", headers={"X-API-Key": key})
+    assert r.status_code == 200
+    assert r.json()["tenant_id"] == "dashboard-tenant"
 

@@ -32,6 +32,7 @@ from neuroguard.security import check_operation
 from neuroguard.settings import load_settings
 from neuroguard.vault.backend import get_backend
 from neuroguard.api.auth import require_api_key
+from neuroguard.api_keys import create_key as create_api_key, list_keys as list_api_keys, revoke_key as revoke_api_key
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -60,6 +61,14 @@ class SecurityCheckBody(BaseModel):
     consent_present: bool
     encryption_enabled: bool
     operation_type: str
+
+
+class CreateApiKeyBody(BaseModel):
+    tenant_id: str
+
+
+class RevokeApiKeyBody(BaseModel):
+    key: str
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +296,38 @@ def create_app() -> FastAPI:
             media_type="application/json",
             headers={"Content-Disposition": "attachment; filename=\"dashboard.json\""},
         )
+
+    # ---------------------------------------------------------------------------
+    # Admin: API key management (protected)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/admin/api-keys")
+    def admin_list_api_keys(
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """List managed API keys for the current tenant."""
+        keys = list_api_keys(tenant_id=tenant_id)
+        return {"keys": [r.to_dict() for r in keys]}
+
+    @app.post("/admin/api-keys")
+    def admin_create_api_key(
+        body: CreateApiKeyBody,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Create a new managed API key for the given tenant_id. Key is returned once."""
+        record = create_api_key(body.tenant_id)
+        return {"ok": True, "key": record.key, "tenant_id": record.tenant_id, "created_at": record.created_at.isoformat()}
+
+    @app.post("/admin/api-keys/revoke")
+    def admin_revoke_api_key(
+        body: RevokeApiKeyBody,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Revoke a managed API key by key value."""
+        ok = revoke_api_key(body.key)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Key not found or already revoked")
+        return {"ok": True}
 
     @app.get("/lineage/{data_id}/export")
     def get_lineage_export(data_id: str) -> Response:

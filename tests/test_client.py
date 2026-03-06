@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from neuroguard.api.app import create_app
+from neuroguard.api_keys import clear_store as clear_api_keys_store
 from neuroguard.client import NeuroGuardClient
 
 
@@ -50,6 +51,7 @@ def temp_ledger_path():
 @pytest.fixture
 def client_with_test_app(temp_ledger_path):
     """NeuroGuardClient backed by the test app (no real HTTP)."""
+    clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     try:
         app = create_app()
@@ -63,6 +65,7 @@ def client_with_test_app(temp_ledger_path):
 @pytest.fixture
 def client_with_api_key(temp_ledger_path):
     """NeuroGuardClient with API key, backed by test app that requires keys."""
+    clear_api_keys_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123"
     try:

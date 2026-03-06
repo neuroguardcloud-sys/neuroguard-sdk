@@ -1,8 +1,8 @@
 """
 Lightweight API key and tenant foundation for NeuroGuard.
 
-When no API keys are configured (env empty), protected routes remain open for local dev.
-When NEUROGUARD_API_KEYS is set, X-API-Key must be valid on protected routes.
+When no API keys are configured (env empty and no managed keys), protected routes
+remain open for local dev. Valid keys can come from managed store or NEUROGUARD_API_KEYS.
 """
 
 from __future__ import annotations
@@ -12,12 +12,14 @@ from typing import Optional, Set
 
 from fastapi import Header, HTTPException
 
+from neuroguard.api_keys import has_any_keys, validate_key as validate_managed_key
+
 DEFAULT_TENANT = "default"
 ENV_API_KEYS = "NEUROGUARD_API_KEYS"
 
 
 def get_configured_api_keys() -> Set[str]:
-    """Return set of valid API keys from env (comma-separated). Empty = auth off."""
+    """Return set of valid API keys from env (comma-separated). Empty = no env keys."""
     raw = os.environ.get(ENV_API_KEYS, "").strip()
     if not raw:
         return set()
@@ -26,16 +28,20 @@ def get_configured_api_keys() -> Set[str]:
 
 def validate_api_key(key: Optional[str]) -> Optional[str]:
     """
-    If key is valid, return tenant_id (derived from key; here we use the key as tenant).
-    If keys not configured, return DEFAULT_TENANT for any key or None.
+    If key is valid, return tenant_id. Checks managed keys first, then env keys.
+    If no keys configured (env empty and no managed keys), return DEFAULT_TENANT for local dev.
     If keys configured and key invalid/missing, return None.
     """
+    # Managed key takes precedence
+    tenant = validate_managed_key(key)
+    if tenant is not None:
+        return tenant
     configured = get_configured_api_keys()
-    if not configured:
+    if key and key in configured:
+        return key
+    if not configured and not has_any_keys():
         return DEFAULT_TENANT
-    if not key or key not in configured:
-        return None
-    return key
+    return None
 
 
 def require_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> str:
