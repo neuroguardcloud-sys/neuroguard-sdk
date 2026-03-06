@@ -26,7 +26,8 @@ from neuroguard.api.pdf_report import generate_compliance_pdf
 from neuroguard import NeuralDataCipher, ConsentManager, AuditLogger, NeuralDataVault
 from neuroguard.audit import AuditAction
 from neuroguard.consent import ConsentLedger
-from neuroguard.privacy_score import evaluate
+from neuroguard.lineage import DataLineage, LineageTracker
+from neuroguard.privacy_score import compute_simple_score, evaluate, is_encryption_enabled
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -52,7 +53,7 @@ class VaultRetrieveBody(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# State (in-memory vault, persisted ledger, shared cipher and audit)
+# State (in-memory vault, persisted ledger, shared cipher, audit, lineage)
 # ---------------------------------------------------------------------------
 
 _ledger: Optional[ConsentLedger] = None
@@ -60,6 +61,7 @@ _cipher: Optional[NeuralDataCipher] = None
 _audit: Optional[AuditLogger] = None
 _consent: Optional[ConsentManager] = None
 _vault: Optional[NeuralDataVault] = None
+_lineage_tracker: Optional[LineageTracker] = None
 
 
 def _get_ledger() -> ConsentLedger:
@@ -92,6 +94,17 @@ def _get_vault() -> NeuralDataVault:
     return _vault
 
 
+def _get_lineage_tracker() -> LineageTracker:
+    if _lineage_tracker is None:
+        raise RuntimeError("API state not initialized")
+    return _lineage_tracker
+
+
+def _vault_data_id(user_id: str, category: str) -> str:
+    """Stable data_id for lineage (vault is keyed by user_id + category)."""
+    return f"{user_id}:{category}"
+
+
 def _has_consent_from_ledger(user_id: str, category: str) -> bool:
     """True if the last consent event for (user_id, category) is grant."""
     ledger = _get_ledger()
@@ -100,7 +113,7 @@ def _has_consent_from_ledger(user_id: str, category: str) -> bool:
 
 
 def _init_state() -> None:
-    global _ledger, _cipher, _audit, _consent, _vault
+    global _ledger, _cipher, _audit, _consent, _vault, _lineage_tracker
     key = os.environ.get("NEUROGUARD_ENCRYPTION_KEY")
     if key:
         try:
@@ -115,6 +128,7 @@ def _init_state() -> None:
     _audit = AuditLogger(use_hash_chain=True)
     _consent = ConsentManager()
     _vault = NeuralDataVault(consent_manager=_consent, audit_logger=_audit)
+    _lineage_tracker = LineageTracker()
 
 
 @asynccontextmanager
@@ -140,6 +154,48 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> Dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/lineage/{data_id}", response_model=DataLineage)
+    def get_lineage(data_id: str) -> DataLineage:
+        """Return the full DataLineage record for the given data_id."""
+        tracker = _get_lineage_tracker()
+        lineage = tracker.get_lineage(data_id)
+        if lineage is None:
+            raise HTTPException(status_code=404, detail="Lineage record not found")
+        return lineage
+
+    @app.get("/privacy-score")
+    def get_privacy_score() -> Dict[str, Any]:
+        """Return a simple privacy score (0-100), status, and reasons based on current setup."""
+        encryption_enabled = False
+        consent_enabled = False
+        audit_enabled = False
+        lineage_enabled = False
+        try:
+            encryption_enabled = is_encryption_enabled(_get_cipher())
+        except RuntimeError:
+            pass
+        try:
+            _get_consent()
+            consent_enabled = True
+        except RuntimeError:
+            pass
+        try:
+            _get_audit()
+            audit_enabled = True
+        except RuntimeError:
+            pass
+        try:
+            _get_lineage_tracker()
+            lineage_enabled = True
+        except RuntimeError:
+            pass
+        return compute_simple_score(
+            encryption_enabled=encryption_enabled,
+            consent_enabled=consent_enabled,
+            audit_enabled=audit_enabled,
+            lineage_enabled=lineage_enabled,
+        )
 
     # ---------------------------------------------------------------------------
     # Consent
@@ -172,7 +228,8 @@ def create_app() -> FastAPI:
     @app.post("/vault/store")
     def vault_store(body: VaultStoreBody) -> Dict[str, Any]:
         user_id, category, plaintext_base64 = body.user_id, body.category, body.plaintext_base64
-        if not _has_consent_from_ledger(user_id, category):
+        consent_ok = _has_consent_from_ledger(user_id, category)
+        if not consent_ok:
             raise HTTPException(status_code=403, detail="Consent not granted for this user and category")
         try:
             plaintext = base64.b64decode(plaintext_base64)
@@ -184,6 +241,12 @@ def create_app() -> FastAPI:
         encrypted = cipher.encrypt(plaintext)
         vault.store(user_id, category, encrypted)
         audit.log(AuditAction.ENCRYPT, actor=user_id, resource=category, outcome="success", size_bytes=len(encrypted))
+        data_id = _vault_data_id(user_id, category)
+        _get_lineage_tracker().create(
+            data_id,
+            encryption_status="encrypted",
+            consent_verified=consent_ok,
+        )
         return {"ok": True, "user_id": user_id, "category": category}
 
     @app.post("/vault/retrieve")
@@ -208,6 +271,8 @@ def create_app() -> FastAPI:
             outcome="success",
             size_bytes=len(plaintext),
         )
+        data_id = _vault_data_id(user_id, category)
+        _get_lineage_tracker().append_event(data_id, "read", actor=user_id)
         return {"ok": True, "plaintext_base64": base64.b64encode(plaintext).decode("ascii")}
 
     # ---------------------------------------------------------------------------

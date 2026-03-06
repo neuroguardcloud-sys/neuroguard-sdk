@@ -120,3 +120,60 @@ def _encryption_enabled(cipher: NeuralDataCipher) -> bool:
         return True
     except Exception:
         return False
+
+
+def is_encryption_enabled(cipher: Optional[NeuralDataCipher]) -> bool:
+    """Return True if cipher is present and usable for encryption (for simple score)."""
+    return cipher is not None and isinstance(cipher, NeuralDataCipher) and _encryption_enabled(cipher)
+
+
+# ---------------------------------------------------------------------------
+# Simple API-oriented score (encryption, consent, audit, lineage)
+# ---------------------------------------------------------------------------
+
+POINTS_PER_CRITERION = 25
+
+
+def compute_simple_score(
+    encryption_enabled: bool,
+    consent_enabled: bool,
+    audit_enabled: bool,
+    lineage_enabled: bool,
+) -> Dict[str, Any]:
+    """
+    Compute a 0-100 privacy score from four criteria (25 points each).
+    Returns score, status ("low" | "moderate" | "high"), and reasons (missing items).
+    Deterministic and simple for API use.
+    """
+    reasons: List[str] = []
+    if not encryption_enabled:
+        reasons.append("Encryption is not enabled.")
+    if not consent_enabled:
+        reasons.append("Consent enforcement is not enabled.")
+    if not audit_enabled:
+        reasons.append("Audit logging is not enabled.")
+    if not lineage_enabled:
+        reasons.append("Lineage tracking is not enabled.")
+
+    score = 0
+    if encryption_enabled:
+        score += POINTS_PER_CRITERION
+    if consent_enabled:
+        score += POINTS_PER_CRITERION
+    if audit_enabled:
+        score += POINTS_PER_CRITERION
+    if lineage_enabled:
+        score += POINTS_PER_CRITERION
+
+    if score >= 80:
+        status = "low"
+    elif score >= 50:
+        status = "moderate"
+    else:
+        status = "high"
+
+    return {
+        "score": score,
+        "status": status,
+        "reasons": reasons,
+    }

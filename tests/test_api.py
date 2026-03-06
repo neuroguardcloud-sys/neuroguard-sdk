@@ -112,3 +112,82 @@ def test_compliance_report_with_user_id_includes_consent_history(api_client: Tes
     assert data["consent_history"][0]["category"] == "cat"
 
 
+def test_lineage_unknown_data_id_returns_404(api_client: TestClient) -> None:
+    """GET /lineage/{data_id} returns 404 for unknown data_id."""
+    r = api_client.get("/lineage/unknown:id")
+    assert r.status_code == 404
+
+
+def test_lineage_after_vault_store_returns_record(api_client: TestClient) -> None:
+    """After successful /vault/store, GET /lineage/{data_id} returns lineage with expected fields."""
+    user_id, category = "u1", "neural"
+    api_client.post("/consent/grant", json={"user_id": user_id, "category": category, "actor": "user"})
+    api_client.post(
+        "/vault/store",
+        json={
+            "user_id": user_id,
+            "category": category,
+            "plaintext_base64": base64.b64encode(b"payload").decode("ascii"),
+        },
+    )
+    data_id = f"{user_id}:{category}"
+    r = api_client.get(f"/lineage/{data_id}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["data_id"] == data_id
+    assert data["encryption_status"] == "encrypted"
+    assert data["consent_verified"] is True
+    assert "events" in data
+    assert len(data["events"]) >= 1
+    assert data["events"][0]["event_type"] == "create"
+
+
+def test_lineage_after_vault_retrieve_adds_read_event(api_client: TestClient) -> None:
+    """After successful /vault/retrieve, GET /lineage/{data_id} shows an added 'read' event."""
+    user_id, category = "u2", "sensor"
+    api_client.post("/consent/grant", json={"user_id": user_id, "category": category, "actor": "user"})
+    api_client.post(
+        "/vault/store",
+        json={
+            "user_id": user_id,
+            "category": category,
+            "plaintext_base64": base64.b64encode(b"data").decode("ascii"),
+        },
+    )
+    data_id = f"{user_id}:{category}"
+    r_before = api_client.get(f"/lineage/{data_id}")
+    assert r_before.status_code == 200
+    events_before = len(r_before.json()["events"])
+
+    api_client.post("/vault/retrieve", json={"user_id": user_id, "category": category})
+
+    r_after = api_client.get(f"/lineage/{data_id}")
+    assert r_after.status_code == 200
+    events_after = r_after.json()["events"]
+    assert len(events_after) == events_before + 1
+    assert events_after[-1]["event_type"] == "read"
+
+
+def test_privacy_score_returns_expected_shape(api_client: TestClient) -> None:
+    """GET /privacy-score returns 200 with score, status, and reasons."""
+    r = api_client.get("/privacy-score")
+    assert r.status_code == 200
+    data = r.json()
+    assert "score" in data
+    assert "status" in data
+    assert "reasons" in data
+    assert isinstance(data["score"], int)
+    assert 0 <= data["score"] <= 100
+    assert data["status"] in ("low", "moderate", "high")
+    assert isinstance(data["reasons"], list)
+
+
+def test_privacy_score_full_setup_returns_100(api_client: TestClient) -> None:
+    """With full app state (encryption, consent, audit, lineage), GET /privacy-score returns 100 and status low."""
+    r = api_client.get("/privacy-score")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["score"] == 100
+    assert data["status"] == "low"
+    assert data["reasons"] == []
+
