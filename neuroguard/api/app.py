@@ -36,6 +36,12 @@ from neuroguard.api_keys import create_key as create_api_key, list_keys as list_
 from neuroguard.tenants import create_tenant, deactivate_tenant, get_tenant, list_tenants
 from neuroguard.usage_meter import get_usage, increment_usage, list_usage
 from neuroguard.plans import check_limit, get_plan, list_plan_definitions, set_plan
+from neuroguard.subscriptions import (
+    cancel_subscription,
+    get_subscription,
+    list_subscriptions,
+    set_subscription as set_subscription_record,
+)
 
 # ---------------------------------------------------------------------------
 # Request/response models
@@ -84,6 +90,13 @@ class DeactivateTenantBody(BaseModel):
 
 class SetPlanBody(BaseModel):
     plan_name: str
+
+
+class SetSubscriptionBody(BaseModel):
+    plan_name: str
+    status: str  # trial | active | past_due | canceled
+    started_at: Optional[str] = None  # ISO datetime
+    renews_at: Optional[str] = None  # ISO datetime
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +466,68 @@ def create_app() -> FastAPI:
         if not ok:
             raise HTTPException(status_code=400, detail="Unknown plan name")
         return {"ok": True, "tenant_id": tenant_id_param, "plan": body.plan_name}
+
+    # ---------------------------------------------------------------------------
+    # Admin: Subscriptions (protected)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/admin/subscriptions")
+    def admin_list_subscriptions(
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """List all subscriptions."""
+        subs = list_subscriptions()
+        return {"subscriptions": [s.to_dict() for s in subs]}
+
+    @app.get("/admin/subscriptions/{tenant_id_param}")
+    def admin_get_subscription(
+        tenant_id_param: str,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Get subscription for a tenant. Returns 404 if none."""
+        sub = get_subscription(tenant_id_param)
+        if sub is None:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        return {"subscription": sub.to_dict()}
+
+    @app.post("/admin/subscriptions/{tenant_id_param}")
+    def admin_set_subscription(
+        tenant_id_param: str,
+        body: SetSubscriptionBody,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Create or update subscription for a tenant."""
+        started_at = None
+        if body.started_at:
+            try:
+                started_at = datetime.fromisoformat(body.started_at.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid started_at")
+        renews_at = None
+        if body.renews_at:
+            try:
+                renews_at = datetime.fromisoformat(body.renews_at.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid renews_at")
+        try:
+            record = set_subscription_record(
+                tenant_id_param, body.plan_name, body.status,
+                started_at=started_at, renews_at=renews_at,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"ok": True, "subscription": record.to_dict()}
+
+    @app.post("/admin/subscriptions/{tenant_id_param}/cancel")
+    def admin_cancel_subscription(
+        tenant_id_param: str,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Cancel subscription for a tenant."""
+        ok = cancel_subscription(tenant_id_param)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        return {"ok": True}
 
     @app.get("/lineage/{data_id}/export")
     def get_lineage_export(data_id: str) -> Response:

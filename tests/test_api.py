@@ -14,6 +14,7 @@ from neuroguard.api_keys import clear_store as clear_api_keys_store
 from neuroguard.tenants import clear_store as clear_tenants_store
 from neuroguard.usage_meter import clear_store as clear_usage_store
 from neuroguard.plans import clear_store as clear_plans_store
+from neuroguard.subscriptions import clear_store as clear_subscriptions_store
 
 
 @pytest.fixture
@@ -34,11 +35,13 @@ def api_client(temp_ledger_path):
     clear_tenants_store()
     clear_usage_store()
     clear_plans_store()
+    clear_subscriptions_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_USAGE_PATH"] = ""
     os.environ["NEUROGUARD_PLANS_PATH"] = ""
+    os.environ["NEUROGUARD_SUBSCRIPTIONS_PATH"] = ""
     try:
         app = create_app()
         with TestClient(app) as client:
@@ -49,6 +52,7 @@ def api_client(temp_ledger_path):
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_USAGE_PATH", None)
         os.environ.pop("NEUROGUARD_PLANS_PATH", None)
+        os.environ.pop("NEUROGUARD_SUBSCRIPTIONS_PATH", None)
 
 
 @pytest.fixture
@@ -58,11 +62,13 @@ def api_client_with_api_key_required(temp_ledger_path):
     clear_tenants_store()
     clear_usage_store()
     clear_plans_store()
+    clear_subscriptions_store()
     os.environ["NEUROGUARD_LEDGER_PATH"] = temp_ledger_path
     os.environ["NEUROGUARD_API_KEYS_PATH"] = ""
     os.environ["NEUROGUARD_TENANTS_PATH"] = ""
     os.environ["NEUROGUARD_USAGE_PATH"] = ""
     os.environ["NEUROGUARD_PLANS_PATH"] = ""
+    os.environ["NEUROGUARD_SUBSCRIPTIONS_PATH"] = ""
     os.environ["NEUROGUARD_API_KEYS"] = "test-key-123,other-key"
     try:
         app = create_app()
@@ -74,6 +80,7 @@ def api_client_with_api_key_required(temp_ledger_path):
         os.environ.pop("NEUROGUARD_TENANTS_PATH", None)
         os.environ.pop("NEUROGUARD_USAGE_PATH", None)
         os.environ.pop("NEUROGUARD_PLANS_PATH", None)
+        os.environ.pop("NEUROGUARD_SUBSCRIPTIONS_PATH", None)
         os.environ.pop("NEUROGUARD_API_KEYS", None)
 
 
@@ -717,4 +724,55 @@ def test_plan_change_restores_access(api_client: TestClient) -> None:
     api_client.post("/admin/plans/default", json={"plan_name": "growth"})
     r = api_client.get("/dashboard")
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Admin subscriptions
+# ---------------------------------------------------------------------------
+
+
+def test_admin_subscriptions_list_and_set_and_get(api_client: TestClient) -> None:
+    """GET /admin/subscriptions empty; POST creates; GET by tenant_id returns it."""
+    r = api_client.get("/admin/subscriptions")
+    assert r.status_code == 200
+    assert r.json()["subscriptions"] == []
+    create_r = api_client.post(
+        "/admin/subscriptions/default",
+        json={"plan_name": "builder", "status": "trial"},
+    )
+    assert create_r.status_code == 200
+    data = create_r.json()
+    assert data["ok"] is True
+    assert "subscription" in data
+    assert data["subscription"]["tenant_id"] == "default"
+    assert data["subscription"]["plan_name"] == "builder"
+    assert data["subscription"]["status"] == "trial"
+    assert "started_at" in data["subscription"]
+    r2 = api_client.get("/admin/subscriptions")
+    assert len(r2.json()["subscriptions"]) == 1
+    r3 = api_client.get("/admin/subscriptions/default")
+    assert r3.status_code == 200
+    assert r3.json()["subscription"]["status"] == "trial"
+
+
+def test_admin_subscriptions_get_unknown_returns_404(api_client: TestClient) -> None:
+    """GET /admin/subscriptions/{tenant_id} for unknown tenant returns 404."""
+    r = api_client.get("/admin/subscriptions/nonexistent-tenant")
+    assert r.status_code == 404
+
+
+def test_admin_subscriptions_cancel(api_client: TestClient) -> None:
+    """POST /admin/subscriptions/{tenant_id}/cancel sets status to canceled."""
+    api_client.post("/admin/subscriptions/t1", json={"plan_name": "growth", "status": "active"})
+    r = api_client.post("/admin/subscriptions/t1/cancel")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    get_r = api_client.get("/admin/subscriptions/t1")
+    assert get_r.json()["subscription"]["status"] == "canceled"
+
+
+def test_admin_subscriptions_cancel_unknown_returns_404(api_client: TestClient) -> None:
+    """POST /admin/subscriptions/{tenant_id}/cancel for unknown returns 404."""
+    r = api_client.post("/admin/subscriptions/nonexistent/cancel")
+    assert r.status_code == 404
 
