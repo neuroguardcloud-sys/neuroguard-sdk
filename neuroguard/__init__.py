@@ -11,6 +11,13 @@ from neuroguard.encryption import NeuralDataCipher
 from neuroguard.consent import ConsentManager
 from neuroguard.audit import AuditLogger
 from neuroguard.vault import NeuralDataVault
+from neuroguard.client import NeuroGuardClient
 
 __version__ = "0.1.0"
-__all__ = ["NeuralDataCipher", "ConsentManager", "AuditLogger", "NeuralDataVault"]
+__all__ = [
+    "NeuralDataCipher",
+    "ConsentManager",
+    "AuditLogger",
+    "NeuralDataVault",
+    "NeuroGuardClient",
+]
