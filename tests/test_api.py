@@ -569,6 +569,65 @@ def test_admin_deactivate_tenant_unknown_returns_404(api_client: TestClient) -> 
     assert r.status_code == 404
 
 
+def test_admin_tenant_summary_existing_tenant(api_client: TestClient) -> None:
+    """GET /admin/tenants/{tenant_id}/summary for an existing tenant returns tenant record, plan, usage, api_keys, dashboard_preview."""
+    create_t = api_client.post("/admin/tenants", json={"name": "Summary Corp"})
+    assert create_t.status_code == 200
+    tenant_id = create_t.json()["tenant_id"]
+    create_k = api_client.post("/admin/api-keys", json={"tenant_id": tenant_id})
+    assert create_k.status_code == 200
+    key = create_k.json()["key"]
+    r = api_client.get(f"/admin/tenants/{tenant_id}/summary", headers={"X-API-Key": key})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["tenant_id"] == tenant_id
+    assert data["tenant"] is not None
+    assert data["tenant"]["name"] == "Summary Corp"
+    assert data["plan"] == "free"
+    assert "usage" in data
+    assert isinstance(data["usage"], dict)
+    assert data["api_keys"] is not None
+    assert len(data["api_keys"]) == 1
+    assert data["api_keys"][0]["tenant_id"] == tenant_id
+    assert "dashboard_preview" in data
+    assert data["dashboard_preview"]["tenant_id"] == tenant_id
+
+
+def test_admin_tenant_summary_unknown_tenant(api_client: TestClient) -> None:
+    """GET /admin/tenants/{tenant_id}/summary for unknown tenant returns tenant=null but plan, usage, api_keys, dashboard_preview."""
+    r = api_client.get("/admin/tenants/unknown-tenant-id/summary")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["tenant_id"] == "unknown-tenant-id"
+    assert data["tenant"] is None
+    assert data["plan"] == "free"
+    assert "usage" in data
+    assert data["api_keys"] == []
+    assert "dashboard_preview" in data
+    assert data["dashboard_preview"]["tenant_id"] == "unknown-tenant-id"
+
+
+def test_admin_tenant_summary_api_keys_filtered_by_tenant(api_client: TestClient) -> None:
+    """Summary for tenant A returns only API keys belonging to tenant A, not other tenants."""
+    create_t1 = api_client.post("/admin/tenants", json={"name": "Tenant A"})
+    create_t2 = api_client.post("/admin/tenants", json={"name": "Tenant B"})
+    tenant_a = create_t1.json()["tenant_id"]
+    tenant_b = create_t2.json()["tenant_id"]
+    k1 = api_client.post("/admin/api-keys", json={"tenant_id": tenant_a}).json()["key"]
+    api_client.post("/admin/api-keys", json={"tenant_id": tenant_a}, headers={"X-API-Key": k1})
+    create_k_b = api_client.post("/admin/api-keys", json={"tenant_id": tenant_b}, headers={"X-API-Key": k1})
+    k_b = create_k_b.json()["key"]
+    r = api_client.get(f"/admin/tenants/{tenant_a}/summary", headers={"X-API-Key": k1})
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["api_keys"]) == 2
+    assert all(k["tenant_id"] == tenant_a for k in data["api_keys"])
+    r2 = api_client.get(f"/admin/tenants/{tenant_b}/summary", headers={"X-API-Key": k_b})
+    assert r2.status_code == 200
+    assert len(r2.json()["api_keys"]) == 1
+    assert r2.json()["api_keys"][0]["tenant_id"] == tenant_b
+
+
 # ---------------------------------------------------------------------------
 # Admin usage metering
 # ---------------------------------------------------------------------------

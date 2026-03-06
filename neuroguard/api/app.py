@@ -384,6 +384,26 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Tenant not found or already deactivated")
         return {"ok": True}
 
+    @app.get("/admin/tenants/{tenant_id_param}/summary")
+    def admin_tenant_summary(
+        tenant_id_param: str,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Read-only summary for one tenant: tenant record (if any), plan, usage, API keys, dashboard preview."""
+        tenant_record = get_tenant(tenant_id_param)
+        plan = get_plan(tenant_id_param)
+        usage = get_usage(tenant_id_param)
+        keys = list_api_keys(tenant_id=tenant_id_param)
+        dashboard_preview = _build_dashboard_data(tenant_id=tenant_id_param)
+        return {
+            "tenant_id": tenant_id_param,
+            "tenant": tenant_record.to_dict() if tenant_record else None,
+            "plan": plan,
+            "usage": usage,
+            "api_keys": [r.to_dict() for r in keys],
+            "dashboard_preview": dashboard_preview,
+        }
+
     # ---------------------------------------------------------------------------
     # Admin: Usage metering (protected)
     # ---------------------------------------------------------------------------
