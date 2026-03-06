@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from neuroguard.usage_meter import METRICS, get_usage
+from neuroguard.subscriptions import get_subscription
 
 DEFAULT_TENANT = "default"
 DEFAULT_PLAN = "free"
@@ -104,6 +105,29 @@ def get_plan(tenant_id: Optional[str]) -> str:
     return _store.get(tid, DEFAULT_PLAN)
 
 
+def get_effective_plan(tenant_id: Optional[str]) -> Tuple[str, Optional[str], Optional[str]]:
+    """
+    Return (effective_plan, subscription_status, warning) for the tenant.
+    - No subscription: use assigned plan; subscription_status=None, warning=None.
+    - trial or active: use assigned plan.
+    - past_due: use assigned plan, warning="Subscription past due".
+    - canceled: effective_plan="free", subscription_status="canceled".
+    """
+    _ensure_loaded()
+    tid = _normalize_tenant(tenant_id)
+    assigned = get_plan(tid)
+    sub = get_subscription(tid)
+    if sub is None:
+        return (assigned, None, None)
+    if sub.status == "canceled":
+        return ("free", "canceled", None)
+    if sub.status == "past_due":
+        return (assigned, "past_due", "Subscription past due")
+    if sub.status in ("trial", "active"):
+        return (assigned, sub.status, None)
+    return (assigned, sub.status, None)
+
+
 def set_plan(tenant_id: str, plan_name: str) -> bool:
     """Assign a plan to a tenant. Returns False if plan_name is unknown."""
     _ensure_loaded()
@@ -117,14 +141,15 @@ def set_plan(tenant_id: str, plan_name: str) -> bool:
 def check_limit(tenant_id: Optional[str], metric: str) -> Tuple[bool, int, str]:
     """
     Check if the tenant is within plan limit for the metric.
+    Uses effective plan (subscription state can downgrade to free when canceled).
     Returns (allowed, remaining, reason). remaining is -1 when unlimited.
     """
     _ensure_loaded()
     tid = _normalize_tenant(tenant_id)
     if metric not in METRICS:
         return True, -1, "OK"
-    plan_name = get_plan(tid)
-    limits = PLAN_LIMITS.get(plan_name, PLAN_LIMITS[DEFAULT_PLAN])
+    effective_plan, _, _ = get_effective_plan(tid)
+    limits = PLAN_LIMITS.get(effective_plan, PLAN_LIMITS[DEFAULT_PLAN])
     limit = limits.get(metric, -1)
     if limit < 0:
         return True, -1, "OK"

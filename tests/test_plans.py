@@ -9,21 +9,27 @@ from neuroguard.plans import (
     PLAN_LIMITS,
     check_limit,
     clear_store,
+    get_effective_plan,
     get_plan,
     list_plan_definitions,
     set_plan,
 )
 from neuroguard.usage_meter import clear_store as clear_usage_store, increment_usage
+from neuroguard.subscriptions import cancel_subscription, clear_store as clear_subs_store, set_subscription
 
 
 @pytest.fixture(autouse=True)
 def isolate_plans():
     os.environ["NEUROGUARD_PLANS_PATH"] = ""
+    os.environ["NEUROGUARD_SUBSCRIPTIONS_PATH"] = ""
     clear_store()
     clear_usage_store()
+    clear_subs_store()
     yield
     clear_store()
+    clear_subs_store()
     os.environ.pop("NEUROGUARD_PLANS_PATH", None)
+    os.environ.pop("NEUROGUARD_SUBSCRIPTIONS_PATH", None)
 
 
 def test_default_plan_is_free() -> None:
@@ -93,3 +99,47 @@ def test_list_plan_definitions() -> None:
     assert "growth" in plans
     assert plans["free"]["dashboard_view"] == 10
     assert plans["growth"]["vault_store"] == -1
+
+
+def test_get_effective_plan_no_subscription_uses_assigned_plan() -> None:
+    """When no subscription exists, effective plan is the assigned plan."""
+    set_plan("t1", "builder")
+    effective, status, warning = get_effective_plan("t1")
+    assert effective == "builder"
+    assert status is None
+    assert warning is None
+
+
+def test_get_effective_plan_canceled_downgrades_to_free() -> None:
+    """When subscription is canceled, effective plan is free."""
+    set_plan("t1", "growth")
+    set_subscription("t1", "growth", "active")
+    cancel_subscription("t1")
+    effective, status, warning = get_effective_plan("t1")
+    assert effective == "free"
+    assert status == "canceled"
+    assert warning is None
+
+
+def test_get_effective_plan_past_due_preserves_plan_sets_warning() -> None:
+    """When subscription is past_due, effective plan unchanged and warning set."""
+    set_plan("t1", "builder")
+    set_subscription("t1", "builder", "past_due")
+    effective, status, warning = get_effective_plan("t1")
+    assert effective == "builder"
+    assert status == "past_due"
+    assert warning == "Subscription past due"
+
+
+def test_check_limit_uses_effective_plan_after_cancel() -> None:
+    """check_limit uses free limits when subscription is canceled."""
+    set_plan("t1", "growth")
+    set_subscription("t1", "growth", "active")
+    for _ in range(11):
+        increment_usage("t1", "dashboard_view")
+    allowed, _, _ = check_limit("t1", "dashboard_view")
+    assert allowed is True  # growth unlimited
+    cancel_subscription("t1")
+    allowed2, remaining, _ = check_limit("t1", "dashboard_view")
+    assert allowed2 is False
+    assert remaining == 0

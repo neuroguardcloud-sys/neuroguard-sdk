@@ -35,7 +35,7 @@ from neuroguard.api.auth import require_api_key
 from neuroguard.api_keys import create_key as create_api_key, list_keys as list_api_keys, revoke_key as revoke_api_key
 from neuroguard.tenants import create_tenant, deactivate_tenant, get_tenant, list_tenants
 from neuroguard.usage_meter import get_usage, increment_usage, list_usage
-from neuroguard.plans import check_limit, get_plan, list_plan_definitions, set_plan
+from neuroguard.plans import check_limit, get_effective_plan, get_plan, list_plan_definitions, set_plan
 from neuroguard.subscriptions import (
     cancel_subscription,
     get_subscription,
@@ -297,14 +297,20 @@ def create_app() -> FastAPI:
             lineage_records = _get_lineage_tracker().record_count(tenant_id=tenant_id)
         except RuntimeError:
             pass
-        return {
+        effective_plan, subscription_status, subscription_warning = get_effective_plan(tenant_id)
+        out = {
             "tenant_id": tenant_id,
             "encrypted_records": encrypted_records,
             "consent_events": consent_events,
             "audit_events": audit_events,
             "lineage_records": lineage_records,
             "privacy_score": privacy_score,
+            "effective_plan": effective_plan,
+            "subscription_status": subscription_status,
         }
+        if subscription_warning:
+            out["warning"] = subscription_warning
+        return out
 
     @app.get("/dashboard")
     def get_dashboard(

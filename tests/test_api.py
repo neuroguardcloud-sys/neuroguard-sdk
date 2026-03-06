@@ -776,3 +776,70 @@ def test_admin_subscriptions_cancel_unknown_returns_404(api_client: TestClient) 
     r = api_client.post("/admin/subscriptions/nonexistent/cancel")
     assert r.status_code == 404
 
+
+# ---------------------------------------------------------------------------
+# Subscription-driven effective plan
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_includes_effective_plan_and_subscription_status(api_client: TestClient) -> None:
+    """GET /dashboard response includes effective_plan, subscription_status; warning when past_due."""
+    r = api_client.get("/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["effective_plan"] == "free"
+    assert data["subscription_status"] is None
+    api_client.post("/admin/subscriptions/default", json={"plan_name": "builder", "status": "active"})
+    r2 = api_client.get("/dashboard")
+    assert r2.status_code == 200
+    assert r2.json()["effective_plan"] == "free"
+    assert r2.json()["subscription_status"] == "active"
+    api_client.post("/admin/plans/default", json={"plan_name": "growth"})
+    api_client.post("/admin/subscriptions/default", json={"plan_name": "growth", "status": "past_due"})
+    r3 = api_client.get("/dashboard")
+    assert r3.status_code == 200
+    assert r3.json()["effective_plan"] == "growth"
+    assert r3.json()["subscription_status"] == "past_due"
+    assert r3.json().get("warning") == "Subscription past due"
+
+
+def test_active_subscription_keeps_paid_plan_limits(api_client: TestClient) -> None:
+    """With active subscription and builder plan, dashboard_view uses builder limit (e.g. >10 allowed)."""
+    api_client.post("/admin/plans/default", json={"plan_name": "builder"})
+    api_client.post("/admin/subscriptions/default", json={"plan_name": "builder", "status": "active"})
+    for _ in range(15):
+        r = api_client.get("/dashboard")
+        assert r.status_code == 200, "builder plan allows 1000 dashboard_view"
+    data = api_client.get("/dashboard").json()
+    assert data["effective_plan"] == "builder"
+    assert data["subscription_status"] == "active"
+
+
+def test_canceled_subscription_downgrades_to_free_limits(api_client: TestClient) -> None:
+    """With canceled subscription, effective plan is free; dashboard enforces free limit (10 views)."""
+    api_client.post("/admin/plans/default", json={"plan_name": "growth"})
+    api_client.post("/admin/subscriptions/default", json={"plan_name": "growth", "status": "active"})
+    api_client.post("/admin/subscriptions/default/cancel")
+    for _ in range(9):
+        assert api_client.get("/dashboard").status_code == 200
+    r10 = api_client.get("/dashboard")
+    assert r10.status_code == 200
+    assert r10.json()["effective_plan"] == "free"
+    assert r10.json()["subscription_status"] == "canceled"
+    r11 = api_client.get("/dashboard")
+    assert r11.status_code == 429
+
+
+def test_past_due_preserves_plan_and_sets_warning(api_client: TestClient) -> None:
+    """With past_due subscription, effective plan unchanged and warning present; limits still paid tier."""
+    api_client.post("/admin/plans/default", json={"plan_name": "builder"})
+    api_client.post("/admin/subscriptions/default", json={"plan_name": "builder", "status": "past_due"})
+    r = api_client.get("/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["effective_plan"] == "builder"
+    assert data["subscription_status"] == "past_due"
+    assert data.get("warning") == "Subscription past due"
+    for _ in range(12):
+        assert api_client.get("/dashboard").status_code == 200
+
