@@ -667,6 +667,42 @@ def test_admin_usage_tenant_id(api_client: TestClient) -> None:
     assert data["usage"]["security_check"] == 1
 
 
+def test_admin_usage_timeline_shape(api_client: TestClient) -> None:
+    """GET /admin/usage/{tenant_id}/timeline returns tenant_id, by_day, by_month."""
+    r = api_client.get("/admin/usage/default/timeline")
+    assert r.status_code == 200
+    data = r.json()
+    assert "tenant_id" in data
+    assert data["tenant_id"] == "default"
+    assert "by_day" in data
+    assert "by_month" in data
+    assert isinstance(data["by_day"], dict)
+    assert isinstance(data["by_month"], dict)
+
+
+def test_admin_usage_timeline_populated(api_client: TestClient) -> None:
+    """After usage, timeline returns by_day and by_month with counts."""
+    api_client.get("/dashboard")
+    api_client.get("/dashboard")
+    r = api_client.get("/admin/usage/default/timeline")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["tenant_id"] == "default"
+    assert isinstance(data["by_day"], dict)
+    assert isinstance(data["by_month"], dict)
+    # At least one day and one month key from the events
+    assert len(data["by_day"]) >= 1
+    assert len(data["by_month"]) >= 1
+    for day_metrics in data["by_day"].values():
+        assert "dashboard_view" in day_metrics
+        assert day_metrics["dashboard_view"] >= 2
+        break
+    for month_metrics in data["by_month"].values():
+        assert "dashboard_view" in month_metrics
+        assert month_metrics["dashboard_view"] >= 2
+        break
+
+
 # ---------------------------------------------------------------------------
 # Admin plan enforcement
 # ---------------------------------------------------------------------------
@@ -775,6 +811,51 @@ def test_admin_subscriptions_cancel_unknown_returns_404(api_client: TestClient) 
     """POST /admin/subscriptions/{tenant_id}/cancel for unknown returns 404."""
     r = api_client.post("/admin/subscriptions/nonexistent/cancel")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Admin billing summary
+# ---------------------------------------------------------------------------
+
+
+def test_admin_billing_summary_returns_expected_shape(api_client: TestClient) -> None:
+    """GET /admin/billing/summary returns 200 with required keys."""
+    r = api_client.get("/admin/billing/summary")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_tenants" in data
+    assert "tenants_by_plan" in data
+    assert "tenants_by_effective_plan" in data
+    assert "subscriptions_by_status" in data
+    assert "active_subscriptions" in data
+    assert "canceled_subscriptions" in data
+    assert "past_due_subscriptions" in data
+    assert "usage_totals_by_metric" in data
+    assert isinstance(data["total_tenants"], int)
+    assert isinstance(data["tenants_by_plan"], dict)
+    assert isinstance(data["tenants_by_effective_plan"], dict)
+    assert isinstance(data["subscriptions_by_status"], dict)
+    assert isinstance(data["active_subscriptions"], int)
+    assert isinstance(data["canceled_subscriptions"], int)
+    assert isinstance(data["past_due_subscriptions"], int)
+    assert isinstance(data["usage_totals_by_metric"], dict)
+
+
+def test_admin_billing_summary_populated(api_client: TestClient) -> None:
+    """With tenants, plans, subscriptions, and usage, billing summary reflects them."""
+    api_client.post("/admin/tenants", json={"name": "Billing Corp"})
+    api_client.post("/admin/plans/default", json={"plan_name": "builder"})
+    api_client.post("/admin/subscriptions/default", json={"plan_name": "builder", "status": "trial"})
+    for _ in range(3):
+        api_client.get("/dashboard")
+    r = api_client.get("/admin/billing/summary")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_tenants"] >= 1
+    assert "free" in data["tenants_by_plan"] or "builder" in data["tenants_by_plan"]
+    assert "trial" in data["subscriptions_by_status"]
+    assert data["active_subscriptions"] >= 1
+    assert data["usage_totals_by_metric"]["dashboard_view"] >= 3
 
 
 # ---------------------------------------------------------------------------

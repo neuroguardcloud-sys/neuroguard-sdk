@@ -1,7 +1,8 @@
-"""Tests for usage metering (increment, get, list, persistence, default tenant)."""
+"""Tests for usage metering (increment, get, list, persistence, default tenant, timeline)."""
 
 import os
 import tempfile
+from datetime import datetime, timezone
 
 import pytest
 
@@ -10,6 +11,8 @@ from neuroguard.usage_meter import (
     METRICS,
     clear_store,
     get_usage,
+    get_usage_by_day,
+    get_usage_by_month,
     increment_usage,
     list_usage,
     reload_from_disk,
@@ -121,3 +124,69 @@ def test_list_usage_after_reload(persisted_usage_path: str) -> None:
     assert out["a"]["vault_store"] == 1
     assert out["a"]["vault_retrieve"] == 1
     assert out["b"]["dashboard_view"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Time-based usage (events, by_day, by_month)
+# ---------------------------------------------------------------------------
+
+
+def test_increment_records_timestamped_events() -> None:
+    """increment_usage records events; get_usage_by_day reflects them."""
+    clear_store()
+    increment_usage("t1", "vault_store")
+    increment_usage("t1", "vault_store")
+    increment_usage("t1", "dashboard_view")
+    by_day = get_usage_by_day("t1")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert today in by_day
+    assert by_day[today]["vault_store"] == 2
+    assert by_day[today]["dashboard_view"] == 1
+
+
+def test_get_usage_by_day_aggregates_by_date() -> None:
+    """get_usage_by_day returns YYYY-MM-DD keys with per-metric counts."""
+    clear_store()
+    increment_usage("agg", "security_check")
+    increment_usage("agg", "security_check")
+    by_day = get_usage_by_day("agg")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert list(by_day.keys()) == [today]
+    assert by_day[today]["security_check"] == 2
+    for m in METRICS:
+        assert m in by_day[today]
+
+
+def test_get_usage_by_month_aggregates_by_month() -> None:
+    """get_usage_by_month returns YYYY-MM keys with per-metric counts."""
+    clear_store()
+    increment_usage("m1", "dashboard_export")
+    increment_usage("m1", "lineage_export")
+    by_month = get_usage_by_month("m1")
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    assert this_month in by_month
+    assert by_month[this_month]["dashboard_export"] == 1
+    assert by_month[this_month]["lineage_export"] == 1
+
+
+def test_get_usage_by_day_month_unknown_tenant_returns_empty() -> None:
+    """get_usage_by_day/month for unknown tenant return empty dicts."""
+    clear_store()
+    assert get_usage_by_day("nonexistent") == {}
+    assert get_usage_by_month("nonexistent") == {}
+
+
+def test_timeline_persistence_across_reload(persisted_usage_path: str) -> None:
+    """Events persist; get_usage_by_day and get_usage_by_month survive reload."""
+    clear_store()
+    increment_usage("persisted-timeline", "vault_store")
+    increment_usage("persisted-timeline", "vault_store")
+    reload_from_disk()
+    by_day = get_usage_by_day("persisted-timeline")
+    by_month = get_usage_by_month("persisted-timeline")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    assert today in by_day
+    assert by_day[today]["vault_store"] == 2
+    assert month in by_month
+    assert by_month[month]["vault_store"] == 2

@@ -34,7 +34,14 @@ from neuroguard.vault.backend import get_backend
 from neuroguard.api.auth import require_api_key
 from neuroguard.api_keys import create_key as create_api_key, list_keys as list_api_keys, revoke_key as revoke_api_key
 from neuroguard.tenants import create_tenant, deactivate_tenant, get_tenant, list_tenants
-from neuroguard.usage_meter import get_usage, increment_usage, list_usage
+from neuroguard.usage_meter import (
+    METRICS,
+    get_usage,
+    get_usage_by_day,
+    get_usage_by_month,
+    increment_usage,
+    list_usage,
+)
 from neuroguard.plans import check_limit, get_effective_plan, get_plan, list_plan_definitions, set_plan
 from neuroguard.subscriptions import (
     cancel_subscription,
@@ -442,6 +449,18 @@ def create_app() -> FastAPI:
         """Get usage counters for a specific tenant."""
         return {"tenant_id": tenant_id_param, "usage": get_usage(tenant_id_param)}
 
+    @app.get("/admin/usage/{tenant_id_param}/timeline")
+    def admin_usage_timeline(
+        tenant_id_param: str,
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Get usage for a tenant aggregated by day and by month."""
+        return {
+            "tenant_id": tenant_id_param,
+            "by_day": get_usage_by_day(tenant_id_param),
+            "by_month": get_usage_by_month(tenant_id_param),
+        }
+
     # ---------------------------------------------------------------------------
     # Admin: Plan enforcement (protected)
     # ---------------------------------------------------------------------------
@@ -534,6 +553,57 @@ def create_app() -> FastAPI:
         if not ok:
             raise HTTPException(status_code=404, detail="Subscription not found")
         return {"ok": True}
+
+    # ---------------------------------------------------------------------------
+    # Admin: Billing summary (protected)
+    # ---------------------------------------------------------------------------
+
+    def _build_billing_summary() -> Dict[str, Any]:
+        """Read-only aggregate of tenants, plans, subscriptions, and usage."""
+        tenant_ids = set()
+        for t in list_tenants():
+            tenant_ids.add(t.tenant_id)
+        for s in list_subscriptions():
+            tenant_ids.add(s.tenant_id)
+        for tid in list_usage():
+            tenant_ids.add(tid)
+        total_tenants = len(tenant_ids)
+        tenants_by_plan: Dict[str, int] = {}
+        for tid in tenant_ids:
+            p = get_plan(tid)
+            tenants_by_plan[p] = tenants_by_plan.get(p, 0) + 1
+        tenants_by_effective_plan: Dict[str, int] = {}
+        for tid in tenant_ids:
+            eff, _, _ = get_effective_plan(tid)
+            tenants_by_effective_plan[eff] = tenants_by_effective_plan.get(eff, 0) + 1
+        subs = list_subscriptions()
+        subscriptions_by_status: Dict[str, int] = {}
+        for s in subs:
+            subscriptions_by_status[s.status] = subscriptions_by_status.get(s.status, 0) + 1
+        active_subscriptions = sum(1 for s in subs if s.status in ("trial", "active"))
+        canceled_subscriptions = sum(1 for s in subs if s.status == "canceled")
+        past_due_subscriptions = sum(1 for s in subs if s.status == "past_due")
+        usage_totals_by_metric: Dict[str, int] = {m: 0 for m in METRICS}
+        for u in list_usage().values():
+            for m in METRICS:
+                usage_totals_by_metric[m] = usage_totals_by_metric.get(m, 0) + u.get(m, 0)
+        return {
+            "total_tenants": total_tenants,
+            "tenants_by_plan": tenants_by_plan,
+            "tenants_by_effective_plan": tenants_by_effective_plan,
+            "subscriptions_by_status": subscriptions_by_status,
+            "active_subscriptions": active_subscriptions,
+            "canceled_subscriptions": canceled_subscriptions,
+            "past_due_subscriptions": past_due_subscriptions,
+            "usage_totals_by_metric": usage_totals_by_metric,
+        }
+
+    @app.get("/admin/billing/summary")
+    def admin_billing_summary(
+        tenant_id: str = Depends(require_api_key),
+    ) -> Dict[str, Any]:
+        """Read-only billing summary: tenants, plans, subscriptions, usage totals."""
+        return _build_billing_summary()
 
     @app.get("/lineage/{data_id}/export")
     def get_lineage_export(data_id: str) -> Response:
