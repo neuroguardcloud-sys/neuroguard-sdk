@@ -6,7 +6,7 @@ NeuroGuard protects sensitive data **before it leaves the device** — with on-d
 
 ## Install
 ```bash
-pip install git+https://github.com/neuroguardcloud-sys/neuroguard-sdk.git
+pip install neuroguard
 ```
 
 ## Quickstart
@@ -74,10 +74,20 @@ pytest tests/ -v
 ## Project Structure
 ```
 neuroguard/
-├── encryption/    # NeuralDataCipher — AES-128-CBC + HMAC
-├── consent/       # ConsentManager, ConsentScope, ConsentLedger
-├── audit/         # AuditLogger, AuditEvent, AuditAction
-└── api/           # FastAPI local REST API
+├── encryption/        # NeuralDataCipher — AES-128-CBC + HMAC
+├── consent/           # ConsentManager, ConsentScope, ConsentLedger
+├── audit/             # AuditLogger, AuditEvent, AuditAction
+├── vault/             # Vault storage backend
+├── lineage/           # Data lineage tracking
+├── db/                # Schema definitions
+├── api/               # FastAPI local REST API
+├── api_keys.py        # API key management
+├── client.py          # SDK client
+├── plans.py           # Plan definitions
+├── subscriptions.py   # Subscription state
+├── tenants.py         # Tenant management
+├── usage_meter.py     # Usage tracking
+└── settings.py        # Configuration
 
 examples/
 └── encrypted_neural_processing.py
@@ -85,7 +95,20 @@ examples/
 tests/
 ├── test_encryption.py
 ├── test_consent.py
-└── test_audit.py
+├── test_consent_ledger.py
+├── test_audit.py
+├── test_vault.py
+├── test_vault_backend.py
+├── test_api.py
+├── test_api_keys.py
+├── test_api_pdf_report.py
+├── test_api_evidence_bundle.py
+├── test_client.py
+├── test_plans.py
+├── test_subscriptions.py
+├── test_tenants.py
+├── test_usage_meter.py
+└── test_privacy_score.py
 ```
 
 ## License
